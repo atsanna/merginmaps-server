@@ -1,0 +1,31 @@
+// widths, heights and font-sizes are updated with custom values from our Figma design
+.p-avatar {
+    background-color: $avatarBg;
+    border-radius: $borderRadius;
+
+    &.p-avatar-lg {
+        width: 2.625rem;
+        height: 2.625rem;
+        font-size: 1.125rem;
+
+        .p-avatar-icon {
+            font-size: 1.125rem;
+        }
+    }
+
+    &.p-avatar-xl {
+        width: 7.5rem;
+        height: 7.5rem;
+        font-size: 3.214rem;
+
+        .p-avatar-icon {
+            font-size: 3.214rem;
+        }
+    }
+}
+
+.p-avatar-group {
+    .p-avatar {
+        border: 2px solid $panelContentBg;
+    }
+}

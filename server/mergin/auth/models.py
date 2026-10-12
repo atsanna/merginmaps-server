@@ -1,0 +1,462 @@
+# Copyright (C) Lutra Consulting Limited
+#
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
+
+from __future__ import annotations
+import datetime
+import secrets
+from typing import List, Optional
+import bcrypt
+import re
+from flask import current_app, request
+from sqlalchemy import or_, func, text
+
+from ..app import db
+from ..audit.listeners import audit_session_flags
+from ..sync.models import ProjectUser
+from ..sync.utils import is_reserved_word
+from ..utils import get_ip, get_user_agent, get_device_id
+
+MAX_USERNAME_LENGTH = 50
+
+
+def _check_dummy_password(password: str) -> None:
+    """Burn the same bcrypt cost as a real check, without an actual user."""
+    rounds = current_app.config.get("BCRYPT_LOG_ROUNDS", 12)
+    bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds))
+
+
+def _parse_lockout_policy(policy_str: str) -> list:
+    """Parse "5:300,10:3600" into [(5, 300), (10, 3600)] sorted ascending by threshold."""
+    result = []
+    for part in policy_str.split(","):
+        threshold, seconds = part.strip().split(":")
+        result.append((int(threshold), int(seconds)))
+    return sorted(result, key=lambda x: x[0])
+
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), info={"label": "Username"})
+    email = db.Column(db.String(120))
+    passwd = db.Column(db.String(80), info={"label": "Password"})  # salted + hashed
+    active = db.Column(db.Boolean, default=True)
+    is_admin = db.Column(db.Boolean)
+    verified_email = db.Column(db.Boolean, default=False)
+    inactive_since = db.Column(db.DateTime(), nullable=True, index=True)
+    registration_date = db.Column(
+        db.DateTime(),
+        nullable=False,
+        info={"label": "Date of creation of user account"},
+        default=datetime.datetime.utcnow,
+    )
+    last_signed_in = db.Column(db.DateTime(), nullable=True)
+    locked_until = db.Column(db.DateTime(), nullable=True)
+    # nonce of the only valid password reset token, cleared on any password change
+    password_reset_nonce = db.Column(db.String(64), nullable=True)
+    # bumped to invalidate all issued bearer tokens and session cookies
+    auth_version = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    receive_notifications = db.Column(
+        db.Boolean, default=True, nullable=False, index=True
+    )
+    first_name = db.Column(db.String(256), nullable=True)
+    last_name = db.Column(db.String(256), nullable=True)
+
+    __table_args__ = (
+        db.Index("ix_user_username", func.lower(username), unique=True),
+        db.Index("ix_user_email", func.lower(email), unique=True),
+    )
+
+    def __init__(self, username, email, passwd=None, is_admin=False):
+        self.username = username
+        self.email = email
+        self.assign_password(passwd)
+        self.is_admin = is_admin
+
+    def __repr__(self):
+        return "<User %r>" % self.username
+
+    def check_password(self, password):
+        # users created through SSO
+        if self.passwd is None:
+            _check_dummy_password(password)
+            return False
+        if isinstance(password, str):
+            password = password.encode("utf-8")
+        return bcrypt.checkpw(password, self.passwd.encode("utf-8"))
+
+    def assign_password(self, password):
+        if isinstance(password, str):
+            password = password.encode("utf-8")
+        rounds = current_app.config.get("BCRYPT_LOG_ROUNDS", 12)
+        self.passwd = (
+            bcrypt.hashpw(password, bcrypt.gensalt(rounds)).decode("utf-8")
+            if password
+            else None
+        )
+        self.password_reset_nonce = None
+
+    def needs_rehash(self):
+        """Return True if the stored hash was generated with a different cost factor than configured."""
+        if self.passwd is None:
+            return False
+        rounds = current_app.config.get("BCRYPT_LOG_ROUNDS", 12)
+        try:
+            # bcrypt hash format: $2b$<rounds>$<salt+hash>
+            hash_rounds = int(self.passwd.split("$")[2])
+            return hash_rounds < rounds
+        except (IndexError, ValueError):
+            return False
+
+    def is_locked_out(self) -> bool:
+        """Return True if the account is currently under a temporary lockout."""
+        if self.locked_until is None:
+            return False
+        return self.locked_until > datetime.datetime.utcnow()
+
+    def record_failed_login(self) -> Optional[int]:
+        """Record a failed login attempt and apply a lockout if a threshold is crossed,
+        counting only failed attempts within the trailing LOCKOUT_WINDOW and
+        since the last successful login (whichever bound is more recent).
+
+        Note: failed attempts from a user agent excluded from login_history logging
+        are not recorded at all, so they do not count toward lockout either.
+
+        Returns the lockout duration in seconds if a new lock was just applied, else None.
+        """
+        LoginHistory.add_record(self.id, request, successful=False)
+        window = current_app.config.get("LOCKOUT_WINDOW", 3600)
+        since = datetime.datetime.utcnow() - datetime.timedelta(seconds=window)
+        if self.last_signed_in and self.last_signed_in > since:
+            since = self.last_signed_in
+        recent_failures = LoginHistory.count_recent_failures(self.id, since)
+
+        policy = _parse_lockout_policy(
+            current_app.config.get("LOCKOUT_POLICY", "5:300,10:3600")
+        )
+        # only trigger on landing exactly on a tier's threshold
+        duration = None
+        for threshold, seconds in policy:
+            if recent_failures == threshold:
+                duration = seconds
+        if duration is not None:
+            self.locked_until = datetime.datetime.utcnow() + datetime.timedelta(
+                seconds=duration
+            )
+        return duration
+
+    def reset_lockout(self) -> None:
+        """Clear lockout state after a successful login."""
+        self.locked_until = None
+
+    def rotate_password_reset_nonce(self) -> str:
+        """Set a new password reset nonce, invalidating any previously issued reset token."""
+        self.password_reset_nonce = secrets.token_urlsafe(32)
+        return self.password_reset_nonce
+
+    def revoke_sessions(self) -> None:
+        """Invalidate all bearer tokens and session cookies issued so far."""
+        self.auth_version += 1
+
+    @property
+    def is_authenticated(self):
+        """For Flask-Login"""
+        return True
+
+    @property
+    def is_active(self):
+        """For Flask-Login"""
+        return self.active
+
+    @property
+    def is_anonymous(self):
+        """For Flask-Login"""
+        return False
+
+    def get_id(self):
+        """For Flask-Login, stored in session cookie ... user ID bound to auth version"""
+        return f"{self.id}:{self.auth_version}"
+
+    @staticmethod
+    def search(like: str, limit: int = 10, only_active: bool = True) -> List[User]:
+        """
+        Find users using ilike pattern within username/email
+
+        Results are returned in following order:
+        1.) exact match - ordered by attribute
+        2.) match is on start of the string - ordered by attribute
+        3.) match is on start of words - ordered by attribute
+        4.) match is anywhere - ordered by attribute
+        """
+        if only_active:
+            users_query = User.query.filter_by(active=True)
+        else:
+            users_query = User.query
+        attr = User.email if "@" in like else User.username
+        # try with exact match
+        users_found = (
+            users_query.filter(attr.ilike(like)).order_by(attr).limit(limit).all()
+        )
+        # we keep searching until we have enough results
+        if len(users_found) < limit:
+            # prefix match except the previous results
+            query_prefix = attr.ilike(f"{like}%") & User.id.notin_(
+                [usr.id for usr in users_found]
+            )
+            users_prefix = (
+                users_query.filter(query_prefix)
+                .order_by(attr)
+                .limit(limit - len(users_found))
+                .all()
+            )
+            users_found.extend(users_prefix)
+            if len(users_found) < limit:
+                # match on start of words except the previous results
+                query_prefix_words = attr.op("~")(
+                    f"[\\.|\\-|_| ]{like}.*"
+                ) & User.id.notin_([usr.id for usr in users_found])
+                users_prefix_words = (
+                    users_query.filter(query_prefix_words)
+                    .order_by(attr)
+                    .limit(limit - len(users_found))
+                    .all()
+                )
+                users_found.extend(users_prefix_words)
+                if len(users_found) < limit:
+                    # match anywhere except the previous results
+                    query_match_anywhere = attr.ilike(f"%{like}%") & User.id.notin_(
+                        [usr.id for usr in users_found]
+                    )
+                    users_anywhere = (
+                        users_query.filter(query_match_anywhere)
+                        .order_by(attr)
+                        .limit(limit - len(users_found))
+                        .all()
+                    )
+                    users_found.extend(users_anywhere)
+        return users_found
+
+    @property
+    def removal_at(self) -> Optional[datetime.timedelta]:
+        """Timestamp of pending user removal. While user is waiting for removal, it is not possible to create
+        another user with the same username/email
+        """
+        if not self.inactive_since:
+            return
+        return self.inactive_since + datetime.timedelta(
+            days=current_app.config["ACCOUNT_EXPIRATION"]
+        )
+
+    def inactivate(self) -> None:
+        """Inactivate user account and remove explicitly shared projects as well clean references to created projects.
+        User is then safe to be removed.
+        """
+        from ..sync.models import AccessRequest, RequestStatus
+
+        db.session.info["project_member_delete_reason"] = "user_deleted"
+        # Remove explicit project permissions; PROJECT_MEMBER_DELETED events fire automatically via the after_delete listener.
+        for m in ProjectUser.query.filter(ProjectUser.user_id == self.id).all():
+            db.session.delete(m)
+
+        # decline all access requests
+        for req in (
+            AccessRequest.query.filter_by(requested_by=self.id)
+            .filter(AccessRequest.status.is_(None))
+            .all()
+        ):
+            req.resolve(RequestStatus.DECLINED, resolved_by=self.id)
+
+        # inactivate user account to prevent login and mark for clean up
+        self.active = False
+        self.inactive_since = datetime.datetime.utcnow()
+        db.session.commit()
+        db.session.info.pop("project_member_delete_reason", None)
+
+    def anonymize(self):
+        """Anonymize user object in database - remove personal information"""
+        ts = round(datetime.datetime.utcnow().timestamp() * 1000)
+        del_str = f"deleted_{ts}"
+        # Suppress user.updated — these changes are covered by the USER_DELETED event.
+        with audit_session_flags(db.session, audit_skip_user_update=True):
+            self.active = False
+            self.username = del_str
+            self.email = None
+            self.passwd = None
+            self.password_reset_nonce = None
+            self.first_name = None
+            self.last_name = None
+            db.session.commit()
+
+    @classmethod
+    def get_by_login(cls, login: str) -> Optional[User]:
+        """Find user by its login which can be either username or email"""
+        login = login.strip().lower()
+        return cls.query.filter(
+            or_(
+                func.lower(User.email) == login,
+                func.lower(User.username) == login,
+            )
+        ).first()
+
+    @classmethod
+    def generate_username(cls, email: str) -> Optional[str]:
+        """Autogenerate username from email"""
+        if not "@" in email:
+            return
+        username = email.split("@")[0].strip().lower()
+        # remove forbidden chars
+        username = re.sub(
+            r"[\@\#\$\%\^\&\*\(\)\{\}\[\]\?\'\"`,;\:\+\=\~\\\/\|\<\>—]", "", username
+        ).ljust(4, "0")
+        # additional check for reserved words
+        username = f"{username}0" if is_reserved_word(username) else username
+        # keep some space for suffix
+        username = username[: MAX_USERNAME_LENGTH - 3]
+        # check if we already do not have existing usernames
+        query = db.session.execute(
+            text(
+                """
+                SELECT
+                    replace(lower(username), :username, '0')::bigint AS suffix
+                FROM "user"
+                WHERE
+                    lower(username) = :username OR
+                    lower(username) SIMILAR TO :username_like
+                ORDER BY replace(lower(username), :username, '0')::bigint DESC
+                LIMIT 1;
+                """
+            ),
+            {"username": username, "username_like": f"{username}\d+"},
+        )
+        suffix = query.scalar()
+        return username if suffix is None else username + str(int(suffix) + 1)
+
+    @classmethod
+    def create(
+        cls, username: str, email: str, password: str, notifications: bool = True
+    ) -> User:
+        user = cls(username.strip(), email.strip(), password, False)
+        user.receive_notifications = notifications
+        db.session.add(user)
+        db.session.commit()
+        return user
+
+    @property
+    def profile(self) -> "User":
+        """Compatibility shim: profile fields are now on User directly."""
+        return self
+
+    def name(self) -> Optional[str]:
+        return f'{self.first_name if self.first_name else ""} {self.last_name if self.last_name else ""}'.strip()
+
+    @property
+    def can_edit_profile(self) -> bool:
+        """Flag if we allow user to edit their email and name"""
+        # False when user is created by SSO login
+        return self.passwd is not None and self.active
+
+
+class LoginHistory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    timestamp = db.Column(db.DateTime(), default=datetime.datetime.utcnow, index=True)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    user_agent = db.Column(db.String, index=True)
+    ip_address = db.Column(db.String, index=True)
+    ip_geolocation_country = db.Column(db.String, index=True)
+    device_id = db.Column(db.String, index=True, nullable=True)
+    successful = db.Column(db.Boolean, nullable=False, server_default="true")
+
+    __table_args__ = (
+        db.Index(
+            "ix_login_history_user_id_successful_timestamp",
+            "user_id",
+            "successful",
+            "timestamp",
+        ),
+    )
+
+    def __init__(
+        self,
+        user_id: int,
+        ua: str,
+        ip: str,
+        device_id: Optional[str] = None,
+        successful: bool = True,
+    ):
+        self.user_id = user_id
+        self.user_agent = ua
+        self.ip_address = ip
+        self.device_id = device_id
+        self.successful = successful
+        self.timestamp = datetime.datetime.now(tz=datetime.timezone.utc)
+
+    @staticmethod
+    def is_excluded_user_agent(ua: Optional[str]) -> bool:
+        """Return True if the user agent matches one of the configured exclusions
+        and should not be logged in the login history."""
+        if not ua:
+            return False
+        excluded = current_app.config.get("LOGIN_HISTORY_EXCLUDED_USER_AGENTS", [])
+        return any(pattern.lower() in ua.lower() for pattern in excluded)
+
+    @staticmethod
+    def add_record(user_id: int, req: request, successful: bool = True) -> None:
+        ua = get_user_agent(req)
+        if LoginHistory.is_excluded_user_agent(ua):
+            return
+        ip = get_ip(req)
+        device_id = get_device_id(req)
+        lh = LoginHistory(user_id, ua, ip, device_id, successful=successful)
+        db.session.add(lh)
+
+        if successful:
+            # cache user last login
+            User.query.filter_by(id=user_id).update({"last_signed_in": lh.timestamp})
+        db.session.commit()
+
+    @staticmethod
+    def count_recent_failures(user_id: int, since: datetime.datetime) -> int:
+        """Count failed login attempts for a user since the given timestamp."""
+        return LoginHistory.query.filter(
+            LoginHistory.user_id == user_id,
+            LoginHistory.successful.is_(False),
+            LoginHistory.timestamp >= since,
+        ).count()
+
+    @staticmethod
+    def get_users_last_signed_in(user_ids: list) -> dict:
+        """Get users last signed in dates.
+        Result is also cached in User table for future use.
+        """
+        result = (
+            db.session.query(
+                LoginHistory.user_id,
+                func.max(LoginHistory.timestamp).label("last_signed_in"),
+            )
+            .filter(
+                LoginHistory.user_id.in_(user_ids),
+                LoginHistory.successful.is_(True),
+            )
+            .group_by(LoginHistory.user_id)
+            .all()
+        )
+
+        user_mapping = [
+            {
+                "id": row.user_id,  # user_id as PK in User table
+                "last_signed_in": row.last_signed_in,
+            }
+            for row in result
+        ]
+        if not user_mapping:
+            return {}
+
+        # cache users last signed in
+        db.session.bulk_update_mappings(User, user_mapping)
+        db.session.commit()
+        return {item["id"]: item["last_signed_in"] for item in user_mapping}

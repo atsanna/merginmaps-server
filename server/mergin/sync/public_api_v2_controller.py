@@ -1,0 +1,666 @@
+# Copyright (C) Lutra Consulting Limited
+#
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
+
+import os
+from datetime import datetime
+from typing import Optional
+import uuid
+import gevent
+import logging
+import os
+import psycopg2
+from connexion import NoContent, request
+from datetime import datetime, timedelta, timezone
+from flask import abort, jsonify, current_app
+from flask_login import current_user
+from marshmallow import ValidationError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+from .schemas_v2 import BatchErrorSchema, ProjectSchema as ProjectSchemaV2
+from ..app import db
+from ..auth import auth_required
+from ..auth.models import User
+from .errors import (
+    AnotherUploadRunning,
+    BatchLimitError,
+    BigChunkError,
+    DataSyncError,
+    DiffDownloadError,
+    ProjectLocked,
+    ProjectVersionExists,
+    StorageLimitHit,
+    UnsupportedFilesDetected,
+    UploadError,
+)
+from .files import (
+    ChangesSchema,
+    DeltaChangeRespSchema,
+    ProjectFileSchema,
+    UnsupportedFileNamesError,
+)
+from .events import SyncEventType
+from ..audit import emit
+from ..audit.listeners import actor_context, audit_session_flags
+from .forms import project_name_validation
+from .models import (
+    FileDiff,
+    Project,
+    ProjectRole,
+    ProjectMember,
+    ProjectVersion,
+    Upload,
+    project_version_created,
+    push_finished,
+)
+from .permissions import (
+    ProjectPermissions,
+    check_project_permissions,
+    require_project_by_uuid,
+    projects_query,
+)
+from .public_api_controller import catch_sync_failure
+from .schemas import (
+    ProjectMemberSchema,
+    UploadChunkSchema,
+)
+from .schemas_v2 import ProjectSchema as ProjectSchemaV2
+from .storages.disk import move_to_tmp, save_to_file
+from .storages.storage import InitializationError
+from .utils import (
+    generate_location,
+    get_chunk_location,
+    prepare_download_response,
+    project_name_conflict_message,
+)
+from ..utils import get_ip, get_user_agent, get_device_id
+from .tasks import remove_transaction_chunks
+from .workspace import WorkspaceRole
+from ..utils import parse_order_params, get_schema_fields_map
+
+
+@auth_required
+def schedule_delete_project(id):
+    """Schedule deletion of the project.
+    Celery job `mergin.sync.tasks.remove_projects_backups` does the
+    rest.
+    """
+    project = require_project_by_uuid(id, ProjectPermissions.Delete)
+    with audit_session_flags(db.session, audit_skip_project_update=True):
+        project.schedule_deletion(removed_by=current_user.id)
+    emit(
+        SyncEventType.PROJECT_MARKED_FOR_DELETION,
+        **actor_context(),
+        target_project_id=project.id,
+        target_workspace_id=project.workspace_id,
+        workspace_name=project.workspace.name,
+        project_name=project.name,
+        scheduled_for_deletion_at=(
+            project.removal_at.isoformat() if project.removal_at else None
+        ),
+    )
+    return NoContent, 204
+
+
+@auth_required
+def delete_project_now(id):
+    """Delete the project immediately"""
+    project = require_project_by_uuid(id, ProjectPermissions.Delete, scheduled=True)
+    project.delete()
+
+    return NoContent, 204
+
+
+@auth_required
+def update_project(id):
+    """Rename project"""
+    project = require_project_by_uuid(id, ProjectPermissions.Update)
+    new_name = request.json["name"].strip()
+    validation_error = project_name_validation(new_name)
+    if validation_error:
+        return (
+            jsonify(code="InvalidProjectName", detail=validation_error),
+            400,
+        )
+    new_name_exists = Project.query.filter_by(
+        workspace_id=project.workspace_id, name=new_name
+    ).first()
+    if new_name_exists:
+        abort(409, "Name already exist within workspace")
+
+    project.name = new_name.strip()
+    db.session.commit()
+
+    return NoContent, 204
+
+
+@auth_required
+def get_project_collaborators(id):
+    """Get project collaborators, with both direct role and inherited role from workspace"""
+    project = require_project_by_uuid(id, ProjectPermissions.Update)
+    project_members = []
+    for user, workspace_role in project.workspace.members():
+        project_role = project.get_role(user.id)
+        if workspace_role != WorkspaceRole.GUEST or project_role is not None:
+            project_members.append(
+                ProjectMember(
+                    id=user.id,
+                    username=user.username,
+                    email=user.email,
+                    project_role=project_role,
+                    workspace_role=workspace_role,
+                    role=ProjectPermissions.get_user_project_role(project, user),
+                    name=user.profile.name(),
+                )
+            )
+
+    data = ProjectMemberSchema(many=True).dump(project_members)
+    return data, 200
+
+
+@auth_required
+def add_project_collaborator(id):
+    """Add project collaborator"""
+    project = require_project_by_uuid(id, ProjectPermissions.Update)
+    user = User.get_by_login(request.json["user"])
+    if not user:
+        abort(404)
+
+    if project.get_role(user.id):
+        abort(409, "User is already a project member")
+
+    project.set_role(user.id, ProjectRole(request.json["role"]))
+    db.session.commit()
+    emit(
+        SyncEventType.PROJECT_MEMBER_ADDED,
+        **actor_context(),
+        target_project_id=project.id,
+        target_workspace_id=project.workspace_id,
+        target_user_id=user.id,
+        target_email=user.email,
+        workspace_name=project.workspace.name,
+        project_name=project.name,
+        role=request.json["role"],
+    )
+    data = ProjectMemberSchema().dump(project.get_member(user.id))
+    return data, 201
+
+
+@auth_required
+def update_project_collaborator(id, user_id):
+    """Update project collaborator"""
+    project = require_project_by_uuid(id, ProjectPermissions.Update)
+    user = User.query.filter_by(id=user_id, active=True).first_or_404()
+    old_role = project.get_role(user_id)
+    if not old_role:
+        abort(404)
+
+    project.set_role(user.id, ProjectRole(request.json["role"]))
+    db.session.commit()
+    emit(
+        SyncEventType.PROJECT_MEMBER_UPDATED,
+        **actor_context(),
+        target_project_id=project.id,
+        target_workspace_id=project.workspace_id,
+        target_user_id=user.id,
+        target_email=user.email,
+        workspace_name=project.workspace.name,
+        project_name=project.name,
+        old_role=old_role.value,
+        new_role=request.json["role"],
+    )
+    data = ProjectMemberSchema().dump(project.get_member(user.id))
+    return data, 200
+
+
+@auth_required
+def remove_project_collaborator(id, user_id):
+    """Remove project collaborator"""
+    project = require_project_by_uuid(id, ProjectPermissions.Update)
+    removed_role = project.get_role(user_id)
+    if not removed_role:
+        abort(404)
+
+    project.unset_role(user_id)
+    db.session.info["project_member_delete_reason"] = "removed"
+    db.session.commit()
+    db.session.info.pop("project_member_delete_reason", None)
+    return NoContent, 204
+
+
+def download_diff_file(id: str, file: str):
+    """Download project geopackage diff file"""
+    project = require_project_by_uuid(id, ProjectPermissions.Read)
+    diff_file = FileDiff.query.filter_by(path=file).first_or_404()
+
+    # create merged diff if it does not exist
+    if not os.path.exists(diff_file.abs_path):
+        diff_created = diff_file.construct_checkpoint()
+        if not diff_created:
+            return DiffDownloadError().response(422)
+
+    response = prepare_download_response(
+        project.storage.project_dir, diff_file.location
+    )
+    return response
+
+
+def get_project(id, files_at_version=None):
+    """Get project info. Include list of files at specific version if requested."""
+    project = require_project_by_uuid(id, ProjectPermissions.Read, expose=False)
+    data = ProjectSchemaV2().dump(project)
+
+    if files_at_version:
+        pv = ProjectVersion.query.filter_by(
+            project_id=project.id, name=ProjectVersion.from_v_name(files_at_version)
+        ).first()
+        if pv:
+            data["files"] = ProjectFileSchema(
+                only=("path", "mtime", "size", "checksum"), many=True
+            ).dump(pv.files)
+
+    return data, 200
+
+
+@auth_required
+@catch_sync_failure
+def create_project_version(id):
+    """Create a new project version from pushed data"""
+    version: int = ProjectVersion.from_v_name(request.json["version"])
+    changes = request.json["changes"]
+    project_permission: ProjectPermissions = (
+        current_app.project_handler.get_push_permission(changes)
+    )
+    project = require_project_by_uuid(id, project_permission)
+    # pass full project object to request for later use
+    request.view_args["project"] = project
+
+    if project.locked_until:
+        return ProjectLocked().response(423)
+
+    next_version = project.next_version()
+    v_next_version = ProjectVersion.to_v_name(next_version)
+    version_dir = os.path.join(project.storage.project_dir, v_next_version)
+
+    try:
+        ChangesSchema().validate(changes)
+        upload_changes = ChangesSchema().dump(changes)
+    except UnsupportedFileNamesError as err:
+        return UnsupportedFilesDetected(err.messages[0], err.paths).response(422)
+    except ValidationError as err:
+        msg = err.messages[0] if type(err.messages) == list else "Invalid input data"
+        return UploadError(error=msg).response(422)
+
+    to_be_added_files = upload_changes["added"]
+    to_be_updated_files = upload_changes["updated"]
+    to_be_removed_files = upload_changes["removed"]
+
+    # check consistency of changes
+    current_files = set(file.path for file in project.files)
+    added_files = set(file["path"] for file in to_be_added_files)
+    if added_files and added_files.issubset(current_files):
+        return UploadError(
+            error=f"Add changes contain files which already exist"
+        ).response(422)
+
+    modified_files = set(
+        file["path"] for file in to_be_updated_files + to_be_removed_files
+    )
+    if modified_files and not modified_files.issubset(current_files):
+        return UploadError(
+            error="Update or remove changes contain files that are not in project"
+        ).response(422)
+
+    # Check user data limit
+    updated_files = list(
+        filter(
+            lambda i: i.path in [f["path"] for f in to_be_updated_files],
+            project.files,
+        )
+    )
+    additional_disk_usage = (
+        sum(file["size"] for file in to_be_added_files + to_be_updated_files)
+        - sum(file.size for file in updated_files)
+        - sum(file["size"] for file in to_be_removed_files)
+    )
+
+    current_usage = project.workspace.disk_usage()
+    requested_storage = current_usage + additional_disk_usage
+    if requested_storage > project.workspace.storage:
+        return StorageLimitHit(current_usage, project.workspace.storage).response(422)
+
+    pv = project.get_latest_version()
+    if pv and pv.name != version:
+        return ProjectVersionExists(version, pv.name).response(409)
+
+    # we have done all checks but this request is just a dry-run
+    if request.json.get("check_only", False):
+        return NoContent, 204
+
+    try:
+        upload = Upload.create_upload(
+            project.id, version, upload_changes, current_user.id
+        )
+        if not upload:
+            return AnotherUploadRunning().response(409)
+    except (IntegrityError, SQLAlchemyError) as err:
+        db.session.rollback()
+        logging.exception(f"Failed to create upload: {str(err)}")
+        return UploadError().response(422)
+    except OSError as err:
+        logging.exception(f"Failed to create upload directory: {str(err)}")
+        return UploadError().response(422)
+
+    # this is the heavy work of processing upload data
+    file_changes, errors = upload.process_chunks(use_shared_chunk_dir=True)
+    # files consistency or geodiff related issues, project push would never succeed, whole upload is aborted
+    if errors:
+        upload.clear()
+        return DataSyncError(failed_files=errors).response(422)
+
+    if os.path.exists(version_dir):
+        if ProjectVersion.query.filter_by(
+            project_id=project.id, name=next_version
+        ).count():
+            upload.clear()
+            return ProjectVersionExists(version, next_version).response(409)
+        move_to_tmp(version_dir)
+
+    try:
+        # let's keep upload alive until all work is done so no one else can claim it
+        with upload.heartbeat(5):
+            pv = ProjectVersion(
+                project,
+                next_version,
+                current_user.id,
+                file_changes,
+                get_ip(request),
+                get_user_agent(request),
+                get_device_id(request),
+            )
+            db.session.add(pv)
+            db.session.add(project)
+
+            # move files before committing so a filesystem failure leaves the DB clean
+            if to_be_added_files or to_be_updated_files:
+                temp_files_dir = os.path.join(
+                    upload.upload_dir, "files", v_next_version
+                )
+                os.renames(temp_files_dir, version_dir)
+
+            db.session.commit()
+            emit(
+                SyncEventType.PROJECT_VERSION_CREATED,
+                **actor_context(),
+                target_project_id=project.id,
+                target_workspace_id=project.workspace_id,
+                workspace_name=project.workspace.name,
+                project_name=project.name,
+                version=v_next_version,
+            )
+
+            # remove used chunks only after commit — chunks belong to the now-committed version
+            if to_be_added_files or to_be_updated_files:
+                chunks_ids = []
+                for file in to_be_added_files + to_be_updated_files:
+                    file_chunks = file.get("chunks", [])
+                    chunks_ids.extend(file_chunks)
+                remove_transaction_chunks.delay(chunks_ids)
+
+            logging.info(
+                f"Push finished for project: {project.id}, project version: {v_next_version}."
+            )
+            project_version_created.send(pv)
+            push_finished.send(pv)
+    except (
+        psycopg2.Error,
+        OSError,
+        IntegrityError,
+    ) as err:
+        db.session.rollback()
+        logging.exception(
+            f"Failed to finish push for project: {project.id}, project version: {v_next_version}: {str(err)}"
+        )
+        if (
+            os.path.exists(version_dir)
+            and not ProjectVersion.query.filter_by(
+                project_id=project.id, name=next_version
+            ).count()
+        ):
+            move_to_tmp(version_dir)
+        return UploadError().response(422)
+    # catch exception during pg transaction so we can rollback and prevent PendingRollbackError during upload clean up
+    except gevent.timeout.Timeout:
+        db.session.rollback()
+        if (
+            os.path.exists(version_dir)
+            and not ProjectVersion.query.filter_by(
+                project_id=project.id, name=next_version
+            ).count()
+        ):
+            move_to_tmp(version_dir)
+        raise
+    finally:
+        # remove upload artifacts
+        upload.clear()
+
+    result = ProjectSchemaV2().dump(project)
+    result["files"] = ProjectFileSchema(
+        only=("path", "mtime", "size", "checksum"), many=True
+    ).dump(project.files)
+    return result, 201
+
+
+@auth_required
+def upload_chunk(id: str):
+    """
+    Push chunk to chunks location.
+    """
+    project = require_project_by_uuid(id, ProjectPermissions.Edit)
+    if project.locked_until:
+        return ProjectLocked().response(423)
+    # generate uuid for chunk
+    chunk_id = str(uuid.uuid4())
+    dest_file = get_chunk_location(chunk_id)
+    try:
+        # we could have used request.data here, but it could eventually cause OOM issue
+        save_to_file(request.stream, dest_file, current_app.config["MAX_CHUNK_SIZE"])
+    except IOError:
+        return BigChunkError().response(413)
+    except Exception as e:
+        return UploadError(error="Error saving chunk").response(400)
+
+    # Add valid_until timestamp to the response, remove tzinfo for compatibility with DateTimeWithZ
+    valid_until = (
+        datetime.now(timezone.utc)
+        + timedelta(seconds=current_app.config["UPLOAD_CHUNKS_EXPIRATION"])
+    ).replace(tzinfo=None)
+    return (
+        UploadChunkSchema().dump({"id": chunk_id, "valid_until": valid_until}),
+        200,
+    )
+
+
+def get_project_delta(id: str, since: str, to: Optional[str] = None):
+    """Get project changes (delta) between two versions"""
+
+    project: Project = require_project_by_uuid(id, ProjectPermissions.Read)
+    since_version = ProjectVersion.from_v_name(since)
+    to_provided = to is not None
+    to_version = (
+        project.latest_version if not to_provided else ProjectVersion.from_v_name(to)
+    )
+    if since_version < 0 or to_version < 0:
+        abort(
+            400,
+            "Invalid version number, minimum version for 'since' is 0 and minimum version for 'to' is 0",
+        )
+
+    if to_version > project.latest_version:
+        abort(400, "The 'to' parameter exceeds latest project version")
+
+    if since_version > to_version:
+        abort(
+            400,
+            f"""The 'since' parameter must be less than or equal to the {"'to' parameter" if to_provided else 'latest project version'}""",
+        )
+
+    try:
+        delta_changes = project.get_delta_changes(since_version, to_version) or []
+    except ValueError:
+        logging.exception(
+            f"Failed to get delta changes for project {project.id} between versions {since_version} and {to_version}"
+        )
+        abort(422)
+    except AssertionError as err:
+        logging.exception(
+            f"Data inconsistency when getting delta changes for project {project.id}: {str(err)}"
+        )
+        abort(422)
+
+    return (
+        DeltaChangeRespSchema().dump(
+            {"to_version": f"v{to_version}", "items": delta_changes}
+        ),
+        200,
+    )
+
+
+@auth_required
+def list_workspace_projects(workspace_id, page, per_page, order_params=None, q=None):
+    """Paginate over workspace projects with optional filtering.
+
+    :param workspace_id: ID of the workspace to list projects from
+    :param workspace_id: int
+    :param page: page number
+    :type page: int
+    :param per_page: Number of results per page
+    :type per_page: int
+    :param order_params: Sorting fields e.g. "name ASC,updated DESC"
+    :type order_params: str
+    :param q: Filter by name with ilike pattern
+    :type q: str
+
+    :rtype: Dict[str: List[Project], str: Integer, str: Integer, str: Integer]
+    """
+    ws = current_app.ws_handler.get(workspace_id)
+    if not (ws and ws.is_active):
+        abort(404, "Workspace not found")
+
+    if ws.user_has_permissions(current_user, "read"):
+        # regular members can list all projects
+        projects = Project.query.filter_by(workspace_id=ws.id).filter(
+            Project.removed_at.is_(None)
+        )
+    elif ws.user_has_permissions(current_user, "guest"):
+        # guest can list only explicitly shared projects
+        projects = projects_query(
+            ProjectPermissions.Read, as_admin=False, public=False
+        ).filter(Project.workspace_id == ws.id)
+    else:
+        abort(403, "You do not have permissions to workspace")
+
+    if q:
+        projects = projects.filter(Project.name.ilike(f"%{q}%"))
+
+    if order_params:
+        schema_map = get_schema_fields_map(ProjectSchemaV2)
+        order_by_params = parse_order_params(
+            Project, order_params, field_map=schema_map
+        )
+        projects = projects.order_by(*order_by_params)
+
+    pagination = projects.paginate(page=page, per_page=per_page)
+    result = pagination.items
+    total = pagination.total
+
+    data = ProjectSchemaV2(many=True).dump(result)
+    return jsonify(projects=data, count=total, page=page, per_page=per_page), 200
+
+
+@auth_required
+def create_project(workspace_id):
+    """Create a new empty project in the workspace"""
+    ws = current_app.ws_handler.get(workspace_id)
+    if not (ws and ws.is_active):
+        abort(404, "Workspace not found")
+
+    if not ws.user_has_permissions(current_user, "admin"):
+        abort(403, "You do not have permissions for this workspace")
+
+    name = request.json["name"].strip()
+    validation_error = project_name_validation(name)
+    if validation_error:
+        return (
+            jsonify(code="InvalidProjectName", detail=validation_error),
+            400,
+        )
+
+    existing_project = Project.query.filter_by(name=name, workspace_id=ws.id).first()
+    if existing_project:
+        abort(409, project_name_conflict_message(existing_project))
+
+    project = Project(
+        name=name,
+        storage_params={"type": "local", "location": generate_location()},
+        creator=current_user,
+        workspace=ws,
+    )
+    project.updated = datetime.utcnow()
+    try:
+        project.storage.initialize()
+    except InitializationError as e:
+        abort(400, f"Failed to initialize project: {str(e)}")
+
+    pv = ProjectVersion(
+        project,
+        0,
+        current_user.id,
+        [],
+        get_ip(request),
+        get_user_agent(request),
+        get_device_id(request),
+    )
+    db.session.add(project)
+    db.session.add(pv)
+    db.session.commit()
+    project_version_created.send(pv)
+
+    return ProjectSchemaV2().dump(project), 201
+
+
+def list_batch_projects(body):
+    """List projects by given list of UUIDs. Limit to 100 projects per request.
+
+    :param ids: List of project UUIDs
+    :type ids: List[str]
+    :rtype: Dict[str: List[Project]]
+    """
+    ids = list(dict.fromkeys(body.get("ids", [])))
+    # remove duplicates while preserving the order
+    max_batch = current_app.config.get("MAX_BATCH_SIZE", 100)
+    if len(ids) > max_batch:
+        return BatchLimitError().response(400)
+
+    projects = current_app.project_handler.get_projects_by_uuids(ids)
+    by_id = {str(project.id): project for project in projects}
+
+    filtered_projects = []
+    for uuid in ids:
+        project = by_id.get(uuid)
+
+        if not project:
+            filtered_projects.append(
+                BatchErrorSchema().dump({"id": uuid, "error": 404})
+            )
+            continue
+
+        err = check_project_permissions(project, ProjectPermissions.Read)
+        if err is not None:
+            filtered_projects.append(
+                BatchErrorSchema().dump({"id": uuid, "error": err})
+            )
+        else:
+            filtered_projects.append(ProjectSchemaV2().dump(project))
+
+    return jsonify(projects=filtered_projects), 200

@@ -1,0 +1,124 @@
+# Copyright (C) Lutra Consulting Limited
+#
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
+
+from flask import current_app
+from marshmallow import fields
+
+from .models import User
+from ..app import DateTimeWithZ, ma
+
+
+class UserProfileSchema(ma.SQLAlchemyAutoSchema):
+    name = ma.Function(
+        lambda obj: obj.name(),
+        dump_only=True,
+    )
+    storage = fields.Method("get_storage", dump_only=True)
+    disk_usage = fields.Method("get_disk_usage", dump_only=True)
+    has_project = fields.Method("_has_project", dump_only=True)
+
+    def get_storage(self, obj):
+        # DEPRECATED functionality - kept for the backward-compatibility
+        ws = current_app.ws_handler.get_by_name(obj.username)
+        if ws:
+            return ws.storage
+
+    def get_disk_usage(self, obj):
+        # DEPRECATED functionality - kept for the backward-compatibility
+        ws = current_app.ws_handler.get_by_name(obj.username)
+        if ws:
+            return ws.disk_usage()
+
+    def _has_project(self, obj):
+        # DEPRECATED functionality - kept for the backward-compatibility
+        from ..sync.models import ProjectUser, Project
+
+        ws = current_app.ws_handler.get_by_name(obj.username)
+        if ws:
+            projects_count = (
+                Project.query.join(ProjectUser)
+                .filter(Project.creator_id == obj.id)
+                .filter(Project.removed_at.is_(None))
+                .filter(Project.workspace_id == ws.id)
+                .filter(ProjectUser.user_id == obj.id)
+                .count()
+            )
+            return projects_count > 0
+        return False
+
+    class Meta:
+        model = User
+        fields = (
+            "receive_notifications",
+            "first_name",
+            "last_name",
+            "name",
+            "storage",
+            "disk_usage",
+            "has_project",
+        )
+        load_instance = True
+
+
+class UserSchema(ma.SQLAlchemyAutoSchema):
+    """User schema with full information"""
+
+    profile = fields.Nested(UserProfileSchema())
+    scheduled_removal = DateTimeWithZ(attribute="removal_at", dump_only=True)
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "username",
+            "email",
+            "active",
+            "is_admin",
+            "verified_email",
+            "profile",
+            "scheduled_removal",
+            "registration_date",
+            "last_signed_in",
+        )
+        load_instance = True
+
+
+class UserSearchSchema(ma.SQLAlchemyAutoSchema):
+    """User schema for public search queries"""
+
+    name = fields.Method("_name", dump_only=True)
+
+    def _name(self, obj):
+        return obj.name()
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "username",
+            "email",
+            "name",
+        )
+        load_instance = True
+
+
+class UserInfoSchema(ma.SQLAlchemyAutoSchema):
+    """User schema with full information"""
+
+    first_name = fields.String()
+    last_name = fields.String()
+    receive_notifications = fields.Boolean()
+    registration_date = DateTimeWithZ(attribute="registration_date")
+    name = fields.Function(lambda obj: obj.name())
+    can_edit_profile = fields.Boolean(attribute="can_edit_profile")
+
+    class Meta:
+        model = User
+        exclude = (
+            "active",
+            "inactive_since",
+            "is_admin",
+            "passwd",
+        )
+        load_instance = True

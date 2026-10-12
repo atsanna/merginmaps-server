@@ -1,0 +1,56 @@
+{
+  "name": "@mergin/admin-lib",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist",
+    "types"
+  ],
+  "main": "dist/admin-lib.js",
+  "module": "dist/admin-lib.js",
+  "types": "types/main.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/admin-lib.js",
+      "require": "./dist/admin-lib.umd.cjs"
+    },
+    "./dist/": {
+      "import": "./dist/",
+      "require": "./dist/"
+    }
+  },
+  "scripts": {
+    "dev": "vite",
+    "preview": "vite preview",
+    "build:watch": "vue-demi-switch 3 && npm-run-all -p build:lib:watch build:types:watch",
+    "build:lib": "vue-demi-switch 3 && yarn clean:types:temp && vite build --mode development",
+    "build:lib:prod": "vue-demi-switch 3 && yarn clean:types:temp && vite build",
+    "build:lib:watch": "vue-demi-switch 3 && yarn clean:types:temp && vite build --mode development --watch",
+    "build:lib:all": "vue-demi-switch 3 && yarn build:lib && yarn build:types",
+    "build:lib:all:prod": "vue-demi-switch 3 && yarn build:lib:prod",
+    "build:types": "vue-demi-switch 3 && yarn clean:types && (vue-tsc --declaration --emitDeclarationOnly || true) && tsc-alias",
+    "build:types:watch": "vue-demi-switch 3 && yarn build:types && (concurrently \"vue-tsc --watch\" \"tsc-alias -w\")",
+    "clean": "yarn clean:lib && yarn clean:types",
+    "clean:lib": "rimraf ./dist",
+    "clean:types:temp": "rimraf ./**/*.vue.ts",
+    "clean:types": "rimraf ./types ./tsconfig.tsbuildinfo && yarn clean:types:temp",
+    "link:register": "yarn link",
+    "link:unregister": "yarn unlink || true",
+    "lint": "eslint . --ext .js,.vue,.ts"
+  },
+  "dependencies": {
+    "axios": "^0.34.0",
+    "axios-retry": "^3.2.4",
+    "lodash": "^4.17.21",
+    "pinia": "^2.1.7",
+    "primeflex": "^3.3.1",
+    "primevue": "3.43.0",
+    "universal-cookie": "^7.2.2",
+    "vue": "3.5.12"
+  },
+  "peerDependencies": {
+    "pinia": ">=2.x",
+    "vue": "3.x"
+  }
+}

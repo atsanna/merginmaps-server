@@ -1,0 +1,304 @@
+# Copyright (C) Lutra Consulting Limited
+#
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
+import os
+import pytest
+import shutil
+from sqlalchemy import tuple_
+from sqlalchemy.orm.attributes import flag_modified
+
+from ..app import db
+from ..auth.models import User
+from ..sync.models import (
+    FileDiff,
+    ProjectFilePath,
+    ProjectVersion,
+    Project,
+    GeodiffActionHistory,
+)
+from ..sync.utils import Checkpoint
+from . import test_project_dir, TMP_DIR
+from .utils import (
+    create_project,
+    create_workspace,
+    gpkgs_are_equal,
+    create_blank_version,
+    execute_query,
+    push_change,
+)
+
+
+def _prepare_restore_project(working_dir: str) -> Project:
+    """Prepare new project with basefile called base.gpkg from testing files"""
+    user = User.query.filter_by(username="mergin").first()
+    test_workspace = create_workspace()
+    project = create_project("restore_test", test_workspace, user)
+
+    # cleanup
+    if os.path.exists(working_dir):
+        shutil.rmtree(working_dir)
+
+    os.makedirs(working_dir, exist_ok=True)
+    # add basefile
+    shutil.copy(
+        os.path.join(test_project_dir, "base.gpkg"),
+        os.path.join(working_dir, "base.gpkg"),
+    )
+    push_change(project, "added", "base.gpkg", working_dir)
+    assert project.latest_version == 1
+    assert os.path.exists(os.path.join(project.storage.project_dir, "v1", "base.gpkg"))
+    return project
+
+
+@pytest.mark.parametrize("forward_check", [True, False])
+def test_crud_in_version_file_restore(app, forward_check):
+    """Test to restore gpkg file where feature went through CRUD operations in subsequent versions"""
+    working_dir = os.path.join(TMP_DIR, "restore_from_diffs_with_crud")
+    basefile = os.path.join(working_dir, "base.gpkg")
+    p = _prepare_restore_project(working_dir)
+
+    # introduce dummy changes to project before making any updated to force restore lookup from the end
+    if not forward_check:
+        for _ in range(3):
+            create_blank_version(p)
+
+    # insert new feature
+    sql = "INSERT INTO simple (geometry, name) VALUES (GeomFromText('POINT(24.5, 38.2)', 4326), 'insert_test')"
+    execute_query(basefile, sql)
+    pv2 = push_change(p, "updated", "base.gpkg", working_dir)
+    assert p.latest_version == pv2.name
+    assert os.path.exists(
+        os.path.join(
+            p.storage.project_dir, ProjectVersion.to_v_name(pv2.name), "base.gpkg"
+        )
+    )
+    # update feature
+    sql = "UPDATE simple SET rating=100 WHERE name='insert_test'"
+    execute_query(basefile, sql)
+    pv3 = push_change(p, "updated", "base.gpkg", working_dir)
+    assert p.latest_version == pv3.name
+    assert os.path.exists(
+        os.path.join(
+            p.storage.project_dir, ProjectVersion.to_v_name(pv3.name), "base.gpkg"
+        )
+    )
+    # delete feature
+    sql = "DELETE FROM simple WHERE name='insert_test'"
+    execute_query(basefile, sql)
+    pv4 = push_change(p, "updated", "base.gpkg", working_dir)
+    assert p.latest_version == pv4.name
+    assert os.path.exists(
+        os.path.join(
+            p.storage.project_dir, ProjectVersion.to_v_name(pv4.name), "base.gpkg"
+        )
+    )
+
+    # introduce dummy changes before last project update to force restore lookup from beginning
+    if forward_check:
+        for _ in range(3):
+            create_blank_version(p)
+
+    # create new version, latest is also 'basefile' from restore point of view
+    sql = "UPDATE simple SET rating=100 WHERE fid=1"
+    execute_query(basefile, sql)
+    pv5 = push_change(p, "updated", "base.gpkg", working_dir)
+    assert p.latest_version == pv5.name
+    assert os.path.exists(
+        os.path.join(
+            p.storage.project_dir, ProjectVersion.to_v_name(pv5.name), "base.gpkg"
+        )
+    )
+
+    # tests we can restore anything between pv1 and pv5
+    for version in [pv2.name, pv3.name, pv4.name]:
+        test_file = os.path.join(
+            p.storage.project_dir, ProjectVersion.to_v_name(version), "base.gpkg"
+        )
+        os.rename(test_file, test_file + "_backup")
+        p.storage.restore_versioned_file("base.gpkg", version)
+        assert os.path.exists(test_file)
+        assert gpkgs_are_equal(test_file, test_file + "_backup")
+
+
+def test_version_file_restore_with_no_changes(app):
+    """Test to restore gpkg file from diffs where history contains some blank versions (no changes)."""
+    working_dir = os.path.join(TMP_DIR, "restore_from_diffs_with_gaps")
+    basefile = os.path.join(working_dir, "base.gpkg")
+    p = _prepare_restore_project(working_dir)
+
+    base_version = p.get_latest_version().name
+    for i in range(3):
+        sql = "INSERT INTO simple (geometry, name) VALUES (GeomFromText('POINT(24.5, 38.2)', 4326), 'insert_test')"
+        execute_query(basefile, sql)
+        pv_latest = push_change(p, "updated", "base.gpkg", working_dir)
+        assert p.latest_version == pv_latest.name
+        assert os.path.exists(
+            os.path.join(
+                p.storage.project_dir,
+                ProjectVersion.to_v_name(pv_latest.name),
+                "base.gpkg",
+            )
+        )
+        # create "no changes" version
+        create_blank_version(p)
+
+    latest_version = p.get_latest_version().name
+    # reconstruct all "diff" file versions including those where no changes were made
+    # but not first basefile and full latest version
+    for ver in range(base_version + 1, latest_version - 1):
+        pv = ProjectVersion.query.filter_by(project_id=str(p.id), name=ver).first()
+        file = next(i for i in pv.files if i.path == "base.gpkg")
+        expected_file = os.path.join(p.storage.project_dir, file.location)
+        # pretend previous full file was removed due to storage optimization
+        os.rename(expected_file, expected_file + "_backup")
+
+        p.storage.restore_versioned_file("base.gpkg", pv.name)
+        assert os.path.exists(expected_file)
+        assert gpkgs_are_equal(expected_file + "_backup", expected_file)
+
+
+def test_version_file_restore(diff_project):
+    """Test restore gpkg file with history which contains deletion, force update and renaming (legacy option)"""
+    test_file = os.path.join(diff_project.storage.project_dir, "v4", "base.gpkg")
+    os.rename(test_file, test_file + "_backup")
+    diff_project.storage.restore_versioned_file("base.gpkg", 4)
+    assert os.path.exists(test_file)
+    assert gpkgs_are_equal(test_file, test_file + "_backup")
+
+    # we can restore version 7 (composed from multiple diffs from v6 and v7)
+    test_file = os.path.join(diff_project.storage.project_dir, "v7", "base.gpkg")
+    os.rename(test_file, test_file + "_backup")
+    diff_project.storage.restore_versioned_file("base.gpkg", 7)
+    assert os.path.exists(test_file)
+    assert gpkgs_are_equal(test_file, test_file + "_backup")
+    # no merged diffs needed
+    file_path_id = (
+        ProjectFilePath.query.filter_by(project_id=diff_project.id, path="base.gpkg")
+        .first()
+        .id
+    )
+    assert (
+        FileDiff.query.filter_by(file_path_id=file_path_id)
+        .filter(FileDiff.rank > 0)
+        .count()
+        == 0
+    )
+
+    # check we track performance of reconstruction
+    gh = GeodiffActionHistory.query.filter_by(
+        project_id=diff_project.id, target_version="v7"
+    ).first()
+    assert gh.base_version == "v5"
+    assert gh.geodiff_time
+    assert gh.copy_time
+    assert gh.action == "restore_file"
+
+    # restore v6 from previous basefile v5
+    test_file = os.path.join(diff_project.storage.project_dir, "v6", "base.gpkg")
+    os.rename(test_file, test_file + "_backup")
+    diff_project.storage.restore_versioned_file("base.gpkg", 6)
+    assert os.path.exists(test_file)
+    assert gpkgs_are_equal(test_file, test_file + "_backup")
+    gh = GeodiffActionHistory.query.filter_by(
+        project_id=diff_project.id, base_version="v5", target_version="v6"
+    ).first()
+    assert gh.geodiff_time
+    assert gh.copy_time
+    # all temp files are gone
+    assert not os.path.exists(diff_project.storage.geodiff_working_dir)
+
+    # basefile can not be restored
+    test_file = os.path.join(diff_project.storage.project_dir, "v5", "base.gpkg")
+    os.remove(test_file)
+    diff_project.storage.restore_versioned_file("base.gpkg", 5)
+    assert not os.path.exists(test_file)
+
+    # no geodiff file can not be restored
+    test_file = os.path.join(diff_project.storage.project_dir, "v1", "test.txt")
+    os.remove(test_file)
+    diff_project.storage.restore_versioned_file("test.txt", 1)
+    assert not os.path.exists(test_file)
+    assert not os.path.exists(diff_project.storage.geodiff_working_dir)
+
+    # let's add some dummy changes to test.gpkg so we can restore full gpkg using checkpoints created on demand
+    file_path_id = (
+        ProjectFilePath.query.filter_by(project_id=diff_project.id, path="test.gpkg")
+        .first()
+        .id
+    )
+    base_gpkg = os.path.join(diff_project.storage.project_dir, "test.gpkg")
+    shutil.copy(
+        os.path.join(diff_project.storage.project_dir, "v9", "test.gpkg"), base_gpkg
+    )
+    for i in range(23):
+        sql = f"UPDATE simple SET rating={i}"
+        execute_query(base_gpkg, sql)
+        pv = push_change(
+            diff_project, "updated", "test.gpkg", diff_project.storage.project_dir
+        )
+        assert diff_project.latest_version == pv.name == (11 + i)
+        file_diff = FileDiff.query.filter_by(
+            file_path_id=file_path_id, version=pv.name, rank=0
+        ).first()
+        assert file_diff and os.path.exists(file_diff.abs_path)
+
+    assert (
+        FileDiff.query.filter_by(file_path_id=file_path_id)
+        .filter(FileDiff.rank > 0)
+        .count()
+        == 0
+    )
+
+    test_file = os.path.join(diff_project.storage.project_dir, "v30", "test.gpkg")
+    os.rename(test_file, test_file + "_backup")
+    diff_project.storage.restore_versioned_file("test.gpkg", 30)
+    # only count diffs from v11-v30 where they were present
+    checkpoints = Checkpoint.get_checkpoints(11, 30)
+    assert os.path.exists(test_file)
+    assert gpkgs_are_equal(test_file, test_file + "_backup")
+    assert FileDiff.query.filter_by(file_path_id=file_path_id).filter(
+        tuple_(FileDiff.rank, FileDiff.version).in_(
+            [(item.rank, item.end) for item in checkpoints]
+        )
+    ).count() == len(checkpoints)
+
+    # checkpoint v9-v12 which contains basefile should not be created
+    assert FileDiff.can_create_checkpoint(file_path_id, Checkpoint(1, 3)) is False
+
+    # let's create new project with basefile at v1 (which can be start of multiple checkpoints)
+    working_dir = os.path.join(TMP_DIR, "restore_from_diffs")
+    basefile = os.path.join(working_dir, "base.gpkg")
+    project = _prepare_restore_project(working_dir)
+    file_path_id = (
+        ProjectFilePath.query.filter_by(project_id=project.id, path="base.gpkg")
+        .first()
+        .id
+    )
+
+    for i in range(17):
+        sql = "INSERT INTO simple (geometry, name) VALUES (GeomFromText('POINT(24.5, 38.2)', 4326), 'insert_test')"
+        execute_query(basefile, sql)
+        pv_latest = push_change(project, "updated", "base.gpkg", working_dir)
+        assert project.latest_version == pv_latest.name
+        assert os.path.exists(
+            os.path.join(
+                project.storage.project_dir,
+                ProjectVersion.to_v_name(pv_latest.name),
+                "base.gpkg",
+            )
+        )
+
+    # checkpoint v1-v16 which contains basefile should not be created
+    assert FileDiff.can_create_checkpoint(file_path_id, Checkpoint(2, 1)) is False
+
+    test_file = os.path.join(project.storage.project_dir, "v17", "base.gpkg")
+    os.rename(test_file, test_file + "_backup")
+    project.storage.restore_versioned_file("base.gpkg", 17)
+    checkpoints = Checkpoint.get_checkpoints(2, 17)
+    assert os.path.exists(test_file)
+    assert gpkgs_are_equal(test_file, test_file + "_backup")
+    assert FileDiff.query.filter_by(file_path_id=file_path_id).filter(
+        tuple_(FileDiff.rank, FileDiff.version).in_(
+            [(item.rank, item.end) for item in checkpoints]
+        )
+    ).count() == len(checkpoints)

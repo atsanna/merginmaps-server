@@ -1,0 +1,735 @@
+openapi: 3.0.0
+info:
+  description: Private Mergin API for web client
+  version: "0.6"
+  title: Private Mergin API
+servers:
+  - url: /app
+tags:
+  - name: account
+    description: Mergin account
+  - name: admin
+    description: Requires admin role
+  - name: project
+    description: Related to mergin project
+paths:
+  /project/access-request/{namespace}:
+    get:
+      tags:
+        - project
+      summary: Paginated list of incoming project access requests to workspace
+      operationId: mergin.sync.private_api_controller.list_namespace_project_access_requests
+      parameters:
+        - name: namespace
+          in: path
+          description: Namespace name
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/OrderParams"
+        - $ref: "#/components/parameters/ProjectName"
+      responses:
+        "200":
+          description: List of project access requests
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedList"
+                  - properties:
+                      items:
+                        $ref: "#/components/schemas/ProjectAccessRequestList"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+  /project/access-request/{namespace}/{project_name}:
+    post:
+      tags:
+        - project
+      summary: Create project access for project <namespace>/<project_name>
+      description: Create project access for project <namespace>/<project_name>
+      operationId: mergin.sync.private_api_controller.create_project_access_request
+      parameters:
+        - name: namespace
+          in: path
+          description: Namespace
+          required: true
+          schema:
+            type: string
+        - name: project_name
+          in: path
+          description: Project name
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+        "409":
+          $ref: "#/components/responses/ConflictResp"
+  /project/access-request/{request_id}:
+    delete:
+      tags:
+        - project
+      summary: Decline project access request for project specified with request id
+      description: Decline project access request for project specified with request id
+      operationId: mergin.sync.private_api_controller.decline_project_access_request
+      parameters:
+        - name: request_id
+          in: path
+          description: Project access request id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+  /project/access-request/accept/{request_id}:
+    post:
+      tags:
+        - project
+      summary: Accept project access request for project specified with request id
+      description: Accept project access request for project specified with request id
+      operationId: mergin.sync.private_api_controller.accept_project_access_request
+      parameters:
+        - name: request_id
+          in: path
+          description: Project access request id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        description: Request data
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - permissions
+              properties:
+                status:
+                  type: string
+                  enum:
+                    - owner
+                    - write
+                    - edit
+                    - read
+                  description: Desired permissions for project
+                  example: write
+      responses:
+        "200":
+          description: OK
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+        "422":
+          description: Reached user limit
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/UsersLimitHit"
+  /project/access-requests:
+    get:
+      tags:
+        - project
+      summary: Paginated list of project access requests initiated by current user in session
+      operationId: mergin.sync.private_api_controller.get_project_access_requests
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/OrderParams"
+        - $ref: "#/components/parameters/ProjectName"
+      responses:
+        "200":
+          description: List of project access requests
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedList"
+                  - properties:
+                      items:
+                        $ref: "#/components/schemas/ProjectAccessRequestList"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /admin/projects:
+    get:
+      tags:
+        - project
+        - admin
+      summary: List projects (incl. inactive ones)
+      description: Paginate over all projects with optional filter by name/workspace and sorting
+      operationId: mergin.sync.private_api_controller.list_projects
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/OrderParams"
+        - name: like
+          in: query
+          description: Filter projects by name or workspace name with ilike pattern
+          required: false
+          schema:
+            type: string
+            example: survey
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                    description: Total number of all projects
+                    example: 20
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProjectListItem"
+        "400":
+          $ref: "#/components/responses/BadStatusResp"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /project/removed-project/{id}:
+    delete:
+      deprecated: true
+      tags:
+        - project
+        - admin
+      summary: Delete removed project specified with id
+      description: Delete removed project permanently, including associated files
+      operationId: mergin.sync.private_api_controller.force_project_delete
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: OK
+        "400":
+          $ref: "#/components/responses/BadStatusResp"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+  /project/removed-project/restore/{id}:
+    post:
+      tags:
+        - project
+        - admin
+      summary: Restore removed project specified with id
+      description: Restore removed project, project is again accessible to its creator but access permissions have been cleared
+      operationId: mergin.sync.private_api_controller.restore_project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: OK
+        "400":
+          $ref: "#/components/responses/BadStatusResp"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+        "409":
+          $ref: "#/components/responses/ConflictResp"
+  /project/templates:
+    get:
+      tags:
+        - project
+      summary: List template projects
+      description: List template projects
+      operationId: mergin.sync.private_api_controller.template_projects
+      responses:
+        "200":
+          description: List of template projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                      example: "d4ecda97-0595-40af-892c-e7522de70bd2"
+                    name:
+                      type: string
+                      example: survey
+                    namespace:
+                      type: string
+                      example: TEMPLATES
+                    version:
+                      $ref: "#/components/schemas/VersionName"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /project/unsubscribe/{id}:
+    post:
+      tags:
+        - project
+      summary: Unsubscribe user from shared project
+      description: Unsubscribe from the shared project if user is reader/writer, access to project is removed
+      operationId: mergin.sync.private_api_controller.unsubscribe_project
+      parameters:
+        - name: id
+          in: path
+          description: project uuid
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+        "400":
+          $ref: "#/components/responses/BadStatusResp"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+  /project/{id}/access:
+    parameters:
+      - name: id
+        in: path
+        description: Project uuid
+        required: true
+        schema:
+          type: string
+    #  // Kept for EE (collaborators + invitation) access, TODO: remove when a separate invitation endpoint is implemented
+    get:
+      tags:
+        - project
+      summary: Get project access
+      operationId: get_project_access
+      responses:
+        "200":
+          description: Project access details
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectAccessDetail"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+      x-openapi-router-controller: mergin.sync.private_api_controller
+  /project/{id}/public:
+    parameters:
+      - name: id
+        in: path
+        description: Project uuid
+        required: true
+        schema:
+          type: string
+    patch:
+      summary: Update public project flag
+      operationId: update_project_public_flag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                public:
+                  type: boolean
+      responses:
+        "204":
+          description: OK
+        "400":
+          $ref: "#/components/responses/BadStatusResp"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+      x-openapi-router-controller: mergin.sync.private_api_controller
+  /projects/{id}/download:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: version
+        in: query
+        description: Particular version to download
+        required: false
+        schema:
+          $ref: "#/components/schemas/VersionName"
+    get:
+      tags:
+        - project
+      summary: Download full project
+      description: Download whole project folder as zip file
+      operationId: download_project
+      responses:
+        "200":
+          description: Zip file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "202":
+          description: Accepted
+        "400":
+          $ref: "#/components/responses/BadStatusResp"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+      x-openapi-router-controller: mergin.sync.private_api_controller
+    post:
+      tags:
+        - project
+      summary: Prepare project archive
+      description: Prepare project zip archive to download
+      operationId: prepare_archive
+      responses:
+        "201":
+          description: Project archive creation started
+        "204":
+          $ref: "#/components/responses/NoContent"
+        "400":
+          $ref: "#/components/responses/BadStatusResp"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFoundResp"
+      x-openapi-router-controller: mergin.sync.private_api_controller
+components:
+  responses:
+    UnauthorizedError:
+      description: Authentication information is missing or invalid.
+    NotFoundResp:
+      description: Project not found.
+    BadStatusResp:
+      description: Invalid request.
+    UnprocessableEntity:
+      description: UnprocessableEntity
+    InvalidDataResp:
+      description: Invalid/unprocessable data.
+    Success:
+      description: Success.
+    Forbidden:
+      description: Access is denied.
+    UnsupportedMediaType:
+      description: Payload format is in an unsupported format.
+    ConflictResp:
+      description: Request could not be processed because of conflict in resources
+    NoContent:
+      description: Success. No content returned.
+  parameters:
+    Page:
+      name: page
+      in: query
+      description: page number
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+        example: 1
+    PerPage:
+      name: per_page
+      in: query
+      description: Number of results per page
+      required: true
+      schema:
+        type: integer
+        maximum: 100
+        example: 50
+    OrderParams:
+      name: order_params
+      in: query
+      description: Sorting fields
+      required: false
+      schema:
+        type: string
+        example: name ASC, expire DESC, disk_usage DESC
+    ProjectName:
+      name: project_name
+      in: query
+      description: Filter by project name
+      required: false
+      schema:
+        type: string
+        example: project_1
+    ProjectId:
+      name: id
+      in: path
+      description: Project uuid
+      required: true
+      schema:
+        type: string
+  schemas:
+    CustomError:
+      type: object
+      properties:
+        code:
+          type: string
+        detail:
+          type: string
+      required:
+        - code
+        - detail
+    UsersLimitHit:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      type: object
+      properties:
+        rejected_emails:
+          nullable: true
+          type: array
+          items:
+            type: string
+        users_quota:
+          type: integer
+      example:
+        code: UsersLimitHit
+        detail: Maximum number of people in this workspace is reached. Please upgrade your subscription to add more people (UsersLimitHit)
+        rejected_emails: [rejected@example.com]
+        users_quota: 6
+    ProjectAccessRequestList:
+      type: array
+      items:
+        $ref: "#/components/schemas/ProjectAccessRequestItem"
+    ProjectAccessRequestItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        project_id:
+          type: string
+          format: uuid
+          example: "d4ecda97-0595-40af-892c-e7522de70bd2"
+        project_name:
+          type: string
+          example: survey
+        namespace:
+          type: string
+          example: john.doe
+        expire:
+          type: string
+          format: date-time
+          example: 2018-11-30T08:47:58Z
+        requested_by:
+          type: string
+          example: jane.doe
+    VersionName:
+      type: string
+      pattern: '^$|^v\d+$'
+      example: v2
+    ProjectListItem:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: survey
+        namespace:
+          type: string
+          description: workspace name
+          example: john.doe
+        disk_usage:
+          type: integer
+          example: 1024
+        version:
+          $ref: "#/components/schemas/VersionName"
+        created:
+          type: string
+          format: date-time
+          example: 2018-11-30T08:47:58Z
+        updated:
+          type: string
+          format: date-time
+          example: 2018-12-30T08:47:58Z
+        removed_at:
+          nullable: true
+          type: string
+          format: date-time
+          example: 2019-11-30T08:47:58Z
+        removed_by:
+          nullable: true
+          type: string
+          example: john.doe
+    PaginatedList:
+      type: object
+      properties:
+        count:
+          type: integer
+          description: Total number of all items in list
+          example: 20
+        items:
+          type: array
+          items:
+            type: object
+            example: 1
+    ProjectAccessDetail:
+      type: object
+      required:
+        - id
+        - type
+        - email
+        - workspace_role
+      properties:
+        id:
+          description: User/Invitation (uu)id
+          oneOf:
+            - type: integer
+            - type: string
+          example: 1
+        type:
+          type: string
+          enum:
+            - member
+            - invitation
+        email:
+          type: string
+          format: email
+          example: john.doe@example.com
+        workspace_role:
+          description: Workspace role
+          $ref: "#/components/schemas/WorkspaceRole"
+        username:
+          description: Present only for type `member`
+          type: string
+          example: john.doe
+        name:
+          description: Present only for type `member`
+          type: string
+          example: John Doe
+        role:
+          description: Project role defined as combination of project and workspace roles
+          $ref: "#/components/schemas/ProjectRole"
+        project_role:
+          nullable: true
+          description: Project role defined in database, not calculated version
+          $ref: "#/components/schemas/ProjectRole"
+        invitation:
+          description: Present only for type `invitation`
+          type: object
+          required:
+            - "expires_at"
+          properties:
+            expires_at:
+              type: string
+              format: date-time
+              example: 2018-11-30T08:47:58.636074Z
+        last_signed_in:
+          description: Present only for type `member`
+          nullable: true
+          type: string
+          format: date-time
+          example: 2025-12-18T08:47:58Z
+    ProjectAccessUpdated:
+      type: object
+      properties:
+        ownersnames:
+          type: array
+          nullable: false
+          items:
+            type: string
+          example: [john.doe]
+        writersnames:
+          type: array
+          nullable: false
+          items:
+            type: string
+          example: [john.doe]
+        editorsnames:
+          type: array
+          nullable: false
+          items:
+            type: string
+          example: [john.doe]
+        readersnames:
+          nullable: false
+          type: array
+          items:
+            type: string
+          example: [john.doe]
+        public:
+          type: boolean
+          example: true
+        owners:
+          type: array
+          nullable: false
+          items:
+            type: integer
+          example: [1]
+        writers:
+          type: array
+          nullable: false
+          items:
+            type: integer
+          example: [1]
+        editors:
+          type: array
+          nullable: false
+          items:
+            type: integer
+            example: [1]
+        readers:
+          type: array
+          nullable: false
+          items:
+            type: integer
+            example: [1]
+    WorkspaceRole:
+      type: string
+      enum:
+        - owner
+        - admin
+        - writer
+        - editor
+        - reader
+        - guest
+    ProjectRole:
+      type: string
+      enum:
+        - owner
+        - writer
+        - editor
+        - reader

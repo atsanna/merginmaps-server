@@ -1,0 +1,1683 @@
+# Copyright (C) Lutra Consulting Limited
+#
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
+
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+import time
+import itsdangerous
+import pytest
+import json
+from flask import url_for
+from sqlalchemy import desc
+from unittest.mock import patch
+
+from ..auth.bearer import decode_token, encode_token
+from ..auth.forms import ResetPasswordForm
+from ..auth.app import (
+    generate_confirmation_token,
+    confirm_token,
+    generate_password_reset_token,
+    generate_unlock_token,
+)
+from ..auth.models import User, LoginHistory
+from ..auth.tasks import anonymize_removed_users
+from ..app import db
+from ..sync.models import Project, ProjectRole
+from . import (
+    test_workspace_id,
+    json_headers,
+    DEFAULT_USER,
+    test_workspace_name,
+    test_project,
+)
+from .utils import (
+    add_user,
+    create_project,
+    create_workspace,
+    login_as_admin,
+    login,
+    upload_file_to_project,
+)
+
+
+@pytest.fixture(scope="function")
+def client(app):
+    client = app.test_client()
+    return client
+
+
+# login tests: success, success with trailing space, success with email login, invalid password, missing password, wrong headers
+test_login_data = [
+    ({"login": "mergin", "password": "ilovemergin"}, json_headers, 200),
+    ({"login": "mergin  ", "password": "ilovemergin"}, json_headers, 200),
+    ({"login": "mergin@mergin.com", "password": "ilovemergin"}, json_headers, 200),
+    (
+        {"login": "mergin", "password": "ilovemergin"},
+        {**json_headers, "X-Device-Id": None},
+        200,
+    ),
+    ({"login": "mergin", "password": "ilovemergi"}, json_headers, 401),
+    ({"login": "mergin"}, json_headers, 401),
+    ({"login": "mergin", "password": "ilovemergin"}, {}, 415),
+    # case insensitive login
+    ({"login": "merGIN", "password": "ilovemergin"}, json_headers, 200),
+    ({"login": "merGIN@MERgin.com", "password": "ilovemergin"}, json_headers, 200),
+]
+
+
+@pytest.mark.parametrize("data,headers,expected", test_login_data)
+def test_login(client, data, headers, expected):
+    resp = client.post(
+        url_for("/.mergin_auth_controller_login"),
+        data=json.dumps(data),
+        headers=headers,
+    )
+    assert resp.status_code == expected
+    if expected == 200:
+        user = User.query.filter_by(username=DEFAULT_USER[0]).first()
+        login_history = (
+            LoginHistory.query.filter_by(user_id=user.id)
+            .order_by(desc(LoginHistory.timestamp))
+            .first()
+        )
+        assert login_history
+        assert login_history.device_id == str(headers.get("X-Device-Id"))
+        assert user.last_signed_in == login_history.timestamp
+        users_last_signed_in = LoginHistory.get_users_last_signed_in([user.id])
+        assert users_last_signed_in[user.id] == login_history.timestamp
+
+        # verify missing value is cached on first LoginHistory access
+        user.last_signed_in = None
+        db.session.commit()
+        users_last_signed_in = LoginHistory.get_users_last_signed_in([user.id])
+        assert user.last_signed_in == users_last_signed_in[user.id]
+
+
+def test_logout(client):
+    login_as_admin(client)
+    resp = client.get("/app/auth/logout")
+    assert resp.status_code == 200
+
+
+@patch("mergin.celery.send_email_async.apply_async")
+def test_login_lockout(send_email_mock, client):
+    """Test account lockout: progressive tiers, freeze during lock.
+
+    policy: 3 failures → 60s lock, 4 failures → 3600s lock, counted over a
+    trailing window (LOCKOUT_WINDOW, default 1h) via LoginHistory, bounded
+    by the last successful login.
+    """
+    user = add_user("lockoutuser", "correctpassword")
+    since = datetime.utcnow() - timedelta(hours=1)
+    baseline = None
+
+    def assert_locked():
+        # must be byte-identical to an ordinary wrong-password response
+        resp = client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": "lockoutuser", "password": "wrong"},
+        )
+        assert resp.status_code == baseline.status_code
+        assert resp.json == baseline.json
+
+    with patch.dict(client.application.config, {"LOCKOUT_POLICY": "3:60,4:3600"}):
+        # tier 1: 3 failures → 60s lock
+        for _ in range(3):
+            resp = client.post(
+                url_for("/.mergin_auth_controller_login"),
+                json={"login": "lockoutuser", "password": "wrong"},
+            )
+            assert resp.status_code == 401
+            if baseline is None:
+                # baseline shape before any lock kicks in
+                baseline = resp
+
+        # lockout email dispatched exactly once, at the moment the lock triggers
+        assert send_email_mock.call_count == 1
+
+        assert_locked()
+
+        # correct password is also blocked while locked
+        resp = client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": "lockoutuser", "password": "correctpassword"},
+        )
+        assert resp.status_code == baseline.status_code
+        assert resp.json == baseline.json
+
+        # no new failures recorded while already locked out
+        assert LoginHistory.count_recent_failures(user.id, since) == 3
+        assert user.locked_until is not None
+
+        # no further emails while already locked out (attempts above were all masked 401s)
+        assert send_email_mock.call_count == 1
+
+        # tier 2 escalation: one more failure after tier-1 expiry
+        # window count was at 3; one new failure pushes it to 4, crossing tier-2 threshold
+
+        # expire_lock
+        user.locked_until = datetime.utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+        resp = client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": "lockoutuser", "password": "wrong"},
+        )
+        # returns 401 (wrong password), but now locked for 3600s
+        assert resp.status_code == 401
+        assert_locked()
+        assert user.locked_until > datetime.utcnow() + timedelta(seconds=60)
+        assert LoginHistory.count_recent_failures(user.id, since) == 4
+
+        # second lockout email dispatched for the tier-2 re-lock
+        assert send_email_mock.call_count == 2
+
+        # successful login after expiry unlocks the account and gives a
+        # clean slate - the 4 prior failures stay in the audit trail...
+        user.locked_until = datetime.utcnow() - timedelta(seconds=1)
+        db.session.commit()
+        resp = client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": "lockoutuser", "password": "correctpassword"},
+        )
+        assert resp.status_code == 200
+        assert user.locked_until is None
+        assert LoginHistory.count_recent_failures(user.id, since) == 4
+
+        # no email on successful login
+        assert send_email_mock.call_count == 2
+
+        # ...but no longer count toward a new lock: one wrong attempt right
+        # after a successful login must not immediately relock the account
+        resp = client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": "lockoutuser", "password": "wrong"},
+        )
+        assert resp.status_code == 401
+        assert not user.is_locked_out()
+        assert send_email_mock.call_count == 2
+
+
+@patch("mergin.celery.send_email_async.apply_async")
+def test_unlock_account(send_email_mock, client, app):
+    """Test the self-service unlock-account link: valid use, reuse, natural
+    expiry, and cross-tier reuse, per the token-binding design.
+
+    Each scenario below uses its own user so failure counts (sourced from
+    LoginHistory over a trailing window) don't bleed between scenarios
+    within the same test.
+    """
+
+    def unlock(token):
+        return client.post(
+            url_for("/.mergin_auth_controller_unlock_account", token=token)
+        )
+
+    def lock_out(username):
+        for _ in range(3):
+            client.post(
+                url_for("/.mergin_auth_controller_login"),
+                json={"login": username, "password": "wrong"},
+            )
+
+    with patch.dict(client.application.config, {"LOCKOUT_POLICY": "3:60,4:3600"}):
+        # unknown user -> 404
+        fake_user = SimpleNamespace(email="nope@x.com", locked_until=datetime.utcnow())
+        resp = unlock(generate_unlock_token(app, fake_user))
+        assert resp.status_code == 404
+
+        # tamper with a valid-looking token -> 400
+        resp = unlock("not-a-real-token")
+        assert resp.status_code == 400
+
+        # trigger tier-1 lock and capture its token
+        user = add_user("unlockuser", "correctpassword")
+        lock_out("unlockuser")
+        assert user.is_locked_out()
+        tier1_token = generate_unlock_token(app, user)
+
+        # valid token unlocks successfully
+        resp = unlock(tier1_token)
+        assert resp.status_code == 200
+        assert user.locked_until is None
+
+        # reuse of the same (now-consumed) token fails
+        resp = unlock(tier1_token)
+        assert resp.status_code == 400
+
+        # naturally-expired lock: token itself still cryptographically valid,
+        # but the lock episode it points to is no longer active
+        stale_user = add_user("staleuser", "correctpassword")
+        lock_out("staleuser")
+        assert stale_user.is_locked_out()
+        stale_token = generate_unlock_token(app, stale_user)
+        stale_user.locked_until = datetime.utcnow() - timedelta(seconds=1)
+        db.session.commit()
+        resp = unlock(stale_token)
+        assert resp.status_code == 400
+
+        # cross-tier reuse: a token minted for one lock episode must not unlock
+        # a later, different lock episode for the same user
+        cross_user = add_user("crossuser", "correctpassword")
+        lock_out("crossuser")
+        tier1_token_2 = generate_unlock_token(app, cross_user)
+        # escalate to tier 2 with a new locked_until
+        cross_user.locked_until = datetime.utcnow() - timedelta(seconds=1)
+        db.session.commit()
+        client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": "crossuser", "password": "wrong"},
+        )
+        assert cross_user.locked_until > datetime.utcnow() + timedelta(seconds=60)
+        resp = unlock(tier1_token_2)
+        assert resp.status_code == 400
+
+
+def test_login_lockout_window_expiry(client):
+    """Failures older than LOCKOUT_WINDOW no longer count toward the threshold."""
+    user = add_user("windowuser", "correctpassword")
+
+    with patch.dict(
+        client.application.config,
+        {"LOCKOUT_POLICY": "3:60,4:3600", "LOCKOUT_WINDOW": 3600},
+    ):
+        for _ in range(3):
+            resp = client.post(
+                url_for("/.mergin_auth_controller_login"),
+                json={"login": "windowuser", "password": "wrong"},
+            )
+            assert resp.status_code == 401
+        assert user.is_locked_out()
+
+        # push all recorded failures outside the 1h window, and let the lock expire
+        LoginHistory.query.filter_by(user_id=user.id, successful=False).update(
+            {"timestamp": datetime.utcnow() - timedelta(hours=2)}
+        )
+        user.locked_until = datetime.utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+        # old failures no longer count - a single new failure should not relock
+        resp = client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": "windowuser", "password": "wrong"},
+        )
+        assert resp.status_code == 401
+        assert not user.is_locked_out()
+        assert user.locked_until is None
+        assert (
+            LoginHistory.count_recent_failures(
+                user.id, datetime.utcnow() - timedelta(hours=1)
+            )
+            == 1
+        )
+
+
+def test_login_lockout_only_at_threshold(client):
+    """With a gap between tiers, counts strictly between two thresholds
+    must not trigger (or re-trigger) a lock - only landing exactly on a
+    threshold does."""
+    user = add_user("borderuser", "correctpassword")
+
+    def attempt():
+        return client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": "borderuser", "password": "wrong"},
+        )
+
+    with patch.dict(client.application.config, {"LOCKOUT_POLICY": "5:300,10:3600"}):
+        # 1-4: nothing happens
+        for _ in range(4):
+            attempt()
+            assert not user.is_locked_out()
+
+        # 5: tier-1 lock
+        attempt()
+        assert user.is_locked_out()
+        assert user.locked_until < datetime.utcnow() + timedelta(seconds=301)
+
+        # simulate the tier-1 lock having expired, then 6-9: nothing happens,
+        # even though the count is still above the tier-1 threshold
+        for expected_count in range(6, 10):
+            user.locked_until = datetime.utcnow() - timedelta(seconds=1)
+            db.session.commit()
+            attempt()
+            assert not user.is_locked_out()
+            assert (
+                LoginHistory.count_recent_failures(
+                    user.id, datetime.utcnow() - timedelta(hours=1)
+                )
+                == expected_count
+            )
+
+        # 10: tier-2 lock
+        user.locked_until = datetime.utcnow() - timedelta(seconds=1)
+        db.session.commit()
+        attempt()
+        assert user.is_locked_out()
+        assert user.locked_until > datetime.utcnow() + timedelta(seconds=3000)
+
+
+def test_login_history_records_failures(client):
+    """Failed attempts are recorded (successful=False) without touching
+    last_signed_in; successful logins are recorded as successful=True and
+    do update last_signed_in."""
+    user = add_user("historyuser", "correctpassword")
+    assert user.last_signed_in is None
+
+    resp = client.post(
+        url_for("/.mergin_auth_controller_login"),
+        json={"login": "historyuser", "password": "wrong"},
+    )
+    assert resp.status_code == 401
+    failed = LoginHistory.query.filter_by(user_id=user.id, successful=False).all()
+    assert len(failed) == 1
+    assert user.last_signed_in is None
+
+    resp = client.post(
+        url_for("/.mergin_auth_controller_login"),
+        json={"login": "historyuser", "password": "correctpassword"},
+    )
+    assert resp.status_code == 200
+    successful = LoginHistory.query.filter_by(user_id=user.id, successful=True).all()
+    assert len(successful) == 1
+    assert user.last_signed_in is not None
+    last_signed_in = user.last_signed_in
+
+    # a later failed attempt must not be reported/cached as the last signed-in
+    # time, even though it's the most recent row for this user overall
+    resp = client.post(
+        url_for("/.mergin_auth_controller_login"),
+        json={"login": "historyuser", "password": "wrong"},
+    )
+    assert resp.status_code == 401
+    user.last_signed_in = None
+    db.session.commit()
+    users_last_signed_in = LoginHistory.get_users_last_signed_in([user.id])
+    assert users_last_signed_in[user.id] == last_signed_in
+    assert user.last_signed_in == last_signed_in
+
+
+@patch("mergin.celery.send_email_async.apply_async")
+def test_invalid_login_timing(send_email_mock, client):
+    """A bcrypt operation must run for every login outcome - nonexistent
+    user, locked-out user, SSO account, and real wrong password.
+    """
+    import bcrypt
+
+    def login_attempt(login, password="dummy"):
+        client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": login, "password": password},
+        )
+
+    locked_user = add_user("timinguser", "correctpassword")
+    with patch(
+        "mergin.auth.models.bcrypt.hashpw", wraps=bcrypt.hashpw
+    ) as mock_hashpw, patch(
+        "mergin.auth.models.bcrypt.checkpw", wraps=bcrypt.checkpw
+    ) as mock_checkpw:
+        login_attempt("no-such-user")
+        assert mock_hashpw.call_count + mock_checkpw.call_count == 1
+
+        with patch.dict(client.application.config, {"LOCKOUT_POLICY": "1:3600"}):
+            login_attempt("timinguser", "wrong")  # real check, also triggers the lock
+            assert mock_hashpw.call_count + mock_checkpw.call_count == 2
+            assert locked_user.is_locked_out()
+
+            login_attempt("timinguser", "wrong")  # now locked - dummy path
+            assert mock_hashpw.call_count + mock_checkpw.call_count == 3
+
+        sso_user = User("ssouser", "sso@test.com")
+        db.session.add(sso_user)
+        db.session.commit()
+        login_attempt("ssouser")  # SSO - dummy path
+        assert mock_hashpw.call_count + mock_checkpw.call_count == 4
+
+
+def test_bcrypt_lazy_rehash(app, monkeypatch):
+    """Password is transparently rehashed on login when the cost factor changes."""
+    import bcrypt
+    from ..auth.app import authenticate
+
+    user = add_user("rehashuser", "rehashpassword")
+    # Store a hash with a low cost factor (4 is the minimum bcrypt allows)
+    low_rounds_hash = bcrypt.hashpw(b"rehashpassword", bcrypt.gensalt(4)).decode(
+        "utf-8"
+    )
+    user.passwd = low_rounds_hash
+    db.session.commit()
+
+    monkeypatch.setitem(app.config, "BCRYPT_LOG_ROUNDS", 5)
+    result = authenticate("rehashuser", "rehashpassword")
+    assert result is not None
+
+    db.session.refresh(user)
+    hash_rounds = int(user.passwd.split("$")[2])
+    assert hash_rounds == 5
+    # rehash is not a password change, existing sessions stay valid
+    assert user.auth_version == 0
+
+
+def test_deactivated_user_session_rejected(client):
+    """Session cookie for a deactivated account must be rejected."""
+    user = add_user("testdeactivate", "testpassword")
+    login(client, "testdeactivate", "testpassword")
+
+    # session works before deactivation
+    resp = client.get(f"/v1/user/{user.username}")
+    assert resp.status_code == 200
+
+    user.active = False
+    db.session.commit()
+
+    # same session must now be rejected
+    resp = client.get(f"/v1/user/{user.username}")
+    assert resp.status_code == 401
+
+
+# user registration tests
+test_user_reg_data = [
+    ("test@test.com", "#pwd1234", 201),  # success
+    (
+        "test@test.com",
+        "#pwd1234",
+        201,
+    ),  # tests with upper case, but user does not exist
+    (
+        "test2@test.com",
+        "#pwd1234",
+        201,
+    ),  # tests with upper case, but user does not exist
+    ("test.com", "#pwd1234", 400),  # invalid email
+    ("admin@example.com", "#pwd1234", 201),  # some random admin with diff email,
+    (
+        " tests@test.com  ",
+        "#pwd1234",
+        201,
+    ),  # tests with blank spaces, whitespace to be removed
+    (
+        " mergin@mergin.com  ",
+        "#pwd1234",
+        400,
+    ),  # tests with blank spaces, but email already exists
+    (
+        " merGIN@mergin.com  ",
+        "#pwd1234",
+        400,
+    ),  # tests with upper case, but email already exists
+    (" mergin@mergin.com  ", "#pwd123", 400),  # invalid password
+    (
+        "verylonglonglonglonglonglonglongemail@lutra-consulting.co.uk",
+        "#pwd1234",
+        201,
+    ),  # long local part, second-level domain, dash in domain
+    ("us.er@mergin.com", "#pwd1234", 201),  # dot is allowed
+    ("us er@mergin.com", "#pwd1234", 400),  # space is disallowed
+    ("test@gmaiñ.com", "#pwd1234", 400),  # non-ASCII character in the domain
+]
+
+
+@pytest.mark.parametrize("email,pwd,expected", test_user_reg_data)
+def test_user_register(client, email, pwd, expected):
+    login_as_admin(client)
+    url = url_for("/.mergin_auth_controller_register_user")
+    data = {"email": email, "password": pwd, "confirm": pwd}
+    resp = client.post(url, data=json.dumps(data), headers=json_headers)
+    assert resp.status_code == expected
+    if expected == 201:
+        user = User.query.filter_by(email=email.strip()).first()
+        assert user
+        assert user.active
+        assert not user.verified_email  # awaits user confirmation
+
+
+def test_confirm_email(app, client):
+    user = User.query.filter_by(username="mergin").first()
+    token = generate_confirmation_token(
+        app, user.email, app.config["SECURITY_EMAIL_SALT"]
+    )
+    user.verified_email = False
+    db.session.commit()
+
+    # verify token can't be used in different context
+    resp = client.post(
+        url_for("/.mergin_auth_controller_confirm_new_password", token=token),
+        json={"password": "ilovemergin#0", "confirm": "ilovemergin#0"},
+    )
+    assert resp.status_code == 400
+
+    resp = client.post(url_for("/.mergin_auth_controller_confirm_email", token=token))
+    assert resp.status_code == 200
+
+    # try again
+    resp = client.post(url_for("/.mergin_auth_controller_confirm_email", token=token))
+    assert resp.status_code == 200
+
+    # invalid token
+    resp = client.post(url_for("/.mergin_auth_controller_confirm_email", token="token"))
+    assert resp.status_code == 400
+
+    # not-existing user
+    resp = client.post(
+        url_for(
+            "/.mergin_auth_controller_confirm_email",
+            token=generate_confirmation_token(
+                app, "tests@mergin.com", app.config["SECURITY_EMAIL_SALT"]
+            ),
+        )
+    )
+    assert resp.status_code == 404
+
+    # test expired token
+    token = generate_confirmation_token(
+        app, user.email, app.config["SECURITY_EMAIL_SALT"]
+    )
+    time.sleep(2)
+    assert not confirm_token(
+        token=token, expiration=1, salt=app.config["SECURITY_EMAIL_SALT"]
+    )
+
+
+def test_confirm_password(app, client):
+    user = User.query.filter_by(username="mergin").first()
+    token = generate_password_reset_token(app, user)
+    db.session.commit()
+
+    form_data = {"password": "ilovemergin#0", "confirm": "ilovemergin#0"}
+
+    # verify token can't be used in different context
+    resp = client.post(url_for("/.mergin_auth_controller_confirm_email", token=token))
+    assert resp.status_code == 400
+
+    resp = client.post(
+        url_for("/.mergin_auth_controller_confirm_new_password", token=token),
+        data=json.dumps(form_data),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+
+    # invalid token
+    resp = client.post(
+        url_for("/.mergin_auth_controller_confirm_new_password", token="token"),
+        data=json.dumps(form_data),
+        headers=json_headers,
+    )
+    assert resp.status_code == 400
+
+    # not-existing user
+    resp = client.post(
+        url_for(
+            "/.mergin_auth_controller_confirm_new_password",
+            token=generate_confirmation_token(
+                app,
+                {"email": "tests@mergin.com", "nonce": "nonce"},
+                app.config["SECURITY_PASSWORD_SALT"],
+            ),
+        ),
+        data=json.dumps(form_data),
+        headers=json_headers,
+    )
+    assert resp.status_code == 404
+
+    # add inactive user
+    user = User(
+        username="tests", passwd="testuser", is_admin=True, email="tests@mergin.com"
+    )
+    user.active = False
+    db.session.add(user)
+    token = generate_password_reset_token(app, user)
+    db.session.commit()
+    resp = client.post(
+        url_for("/.mergin_auth_controller_confirm_new_password", token=token)
+    )
+    assert resp.status_code == 400
+
+
+@patch("mergin.celery.send_email_async.apply_async")
+def test_confirm_password_clears_lockout(send_email_mock, app, client):
+    """Resetting a password via the emailed link clears an active lock,
+    same as the unlock-account link."""
+    user = add_user("resetlockuser", "correctpassword")
+
+    with patch.dict(client.application.config, {"LOCKOUT_POLICY": "3:60,4:3600"}):
+        for _ in range(3):
+            client.post(
+                url_for("/.mergin_auth_controller_login"),
+                json={"login": "resetlockuser", "password": "wrong"},
+            )
+        assert user.is_locked_out()
+
+        token = generate_password_reset_token(app, user)
+        db.session.commit()
+        resp = client.post(
+            url_for("/.mergin_auth_controller_confirm_new_password", token=token),
+            data=json.dumps({"password": "newpass#1", "confirm": "newpass#1"}),
+            headers=json_headers,
+        )
+        assert resp.status_code == 200
+        assert user.locked_until is None
+
+        # failure history is untouched - one more wrong attempt re-locks
+        resp = client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": "resetlockuser", "password": "wrong"},
+        )
+        assert resp.status_code == 401
+        assert user.is_locked_out()
+
+        # but logging in with the new password succeeds and gives a clean slate
+        user.locked_until = None
+        db.session.commit()
+        resp = client.post(
+            url_for("/.mergin_auth_controller_login"),
+            json={"login": "resetlockuser", "password": "newpass#1"},
+        )
+        assert resp.status_code == 200
+        assert not user.is_locked_out()
+
+
+def _confirm_new_password(client, token, password="newpass#1"):
+    return client.post(
+        url_for("/.mergin_auth_controller_confirm_new_password", token=token),
+        data=json.dumps({"password": password, "confirm": password}),
+        headers=json_headers,
+    )
+
+
+@patch("mergin.celery.send_email_async.apply_async")
+def test_reset_password_token_single_use(send_email_mock, app, client):
+    """Reset link is one-off, only the latest link is valid and a regular password change revokes it."""
+    user = add_user("resetuser", "oldpassword")
+
+    # used token cannot be reused
+    token = generate_password_reset_token(app, user)
+    db.session.commit()
+    assert _confirm_new_password(client, token).status_code == 200
+    assert user.password_reset_nonce is None
+    assert _confirm_new_password(client, token, "another#1").status_code == 400
+    assert user.check_password("newpass#1")
+
+    # requesting a new link revokes the older one
+    old_token = generate_password_reset_token(app, user)
+    db.session.commit()
+    resp = client.post(
+        url_for("/.mergin_auth_controller_password_reset"),
+        json={"email": user.email},
+    )
+    assert resp.status_code == 200
+    assert send_email_mock.call_count == 1
+    email_html = send_email_mock.call_args.args[1]["html"]
+    assert old_token not in email_html
+    assert _confirm_new_password(client, old_token).status_code == 400
+    new_token = email_html.split("change-password/")[1].split('"')[0]
+    assert _confirm_new_password(client, new_token, "latest#1").status_code == 200
+
+    # regular password change revokes outstanding link
+    token = generate_password_reset_token(app, user)
+    db.session.commit()
+    login(client, user.username, "latest#1")
+    resp = client.post(
+        url_for("/.mergin_auth_controller_change_password"),
+        json={
+            "old_password": "latest#1",
+            "password": "changed#1",
+            "confirm": "changed#1",
+        },
+    )
+    assert resp.status_code == 200
+    assert _confirm_new_password(client, token).status_code == 400
+    assert user.check_password("changed#1")
+
+
+def test_reset_password_token_expired_or_legacy(app, client):
+    user = add_user("resetuser", "oldpassword")
+    token = generate_password_reset_token(app, user)
+    db.session.commit()
+    with patch.dict(app.config, {"PASSWORD_RESET_TOKEN_EXPIRATION": -1}):
+        assert _confirm_new_password(client, token).status_code == 400
+
+    # token format from before nonces were introduced (email only) is rejected
+    legacy_token = generate_confirmation_token(
+        app, user.email, app.config["SECURITY_PASSWORD_SALT"]
+    )
+    assert _confirm_new_password(client, legacy_token).status_code == 400
+    assert user.check_password("oldpassword")
+
+
+# reset password tests: success, no email, not-existing user (200 - masked)
+test_reset_data = [
+    ({"email": "mergin@mergin.com"}, 200),
+    ({"email": "Mergin@mergin.com"}, 200),  # case insensitive
+    ({}, 400),
+    ({"email": "tests@mergin.com"}, 200),
+]
+
+
+@pytest.mark.parametrize("data,expected", test_reset_data)
+def test_reset_password(client, data, expected):
+    resp = client.post(
+        url_for("/.mergin_auth_controller_password_reset"),
+        data=json.dumps(data),
+        headers=json_headers,
+    )
+    assert resp.status_code == expected
+
+
+@patch("mergin.celery.send_email_async.apply_async")
+def test_reset_password_masks_account_existence(send_email_mock, client):
+    """Response must be identical whether or not the account exists."""
+    resp_existing = client.post(
+        url_for("/.mergin_auth_controller_password_reset"),
+        json={"email": "mergin@mergin.com"},
+    )
+    assert resp_existing.status_code == 200
+    assert send_email_mock.call_count == 1
+
+    resp_missing = client.post(
+        url_for("/.mergin_auth_controller_password_reset"),
+        json={"email": "no-such-user@mergin.com"},
+    )
+    assert resp_missing.status_code == resp_existing.status_code
+    assert resp_missing.json == resp_existing.json
+    # no email dispatched for a nonexistent account
+    assert send_email_mock.call_count == 1
+
+
+def test_change_password(client):
+    username = "user_test"
+    old_password = "user_password"
+    new_password = "Test#tests"
+
+    user = User(
+        username=username,
+        passwd=old_password,
+        is_admin=True,
+        email="user_test@mergin.com",
+    )
+    user.active = True
+    db.session.add(user)
+    db.session.commit()
+
+    resp = client.post(
+        url_for("/.mergin_auth_controller_login"),
+        data=json.dumps({"login": username, "password": old_password}),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+
+    # tests old password incorrect
+    resp = client.post(
+        url_for("/.mergin_auth_controller_change_password"),
+        data=json.dumps(
+            {
+                "old_password": "old_password_incorrect",
+                "password": new_password,
+                "confirm": new_password,
+            }
+        ),
+        headers=json_headers,
+    )
+    assert resp.status_code == 400
+
+    # tests correct old password
+    resp = client.post(
+        url_for("/.mergin_auth_controller_change_password"),
+        data=json.dumps(
+            {
+                "old_password": old_password,
+                "password": new_password,
+                "confirm": new_password,
+            }
+        ),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+
+    # tests login with old password
+    resp = client.post(
+        url_for("/.mergin_auth_controller_login"),
+        data=json.dumps({"login": username, "password": old_password}),
+        headers=json_headers,
+    )
+    assert resp.status_code == 401
+
+    # tests login with new password
+    resp = client.post(
+        url_for("/.mergin_auth_controller_login"),
+        data=json.dumps({"login": username, "password": new_password}),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+
+
+def test_remove_user(client):
+    """Test force removal of user by admin"""
+    login_as_admin(client)
+    user = add_user("tests", "tests")
+
+    resp = client.delete(
+        url_for("/.mergin_auth_controller_delete_user", username=user.username)
+    )
+    assert resp.status_code == 204
+    assert not User.query.filter_by(username="tests").count()
+    assert user.username.startswith("deleted_") and not user.active
+
+    resp = client.delete(
+        url_for("/.mergin_auth_controller_delete_user", username="tests")
+    )
+    assert resp.status_code == 404
+
+    # try to login but user should not be found
+    resp = client.post(
+        url_for("/.mergin_auth_controller_login"),
+        data=json.dumps({"login": "tests", "password": "tests"}),
+        headers=json_headers,
+    )
+    assert resp.status_code == 401
+
+
+# login tests: success, success with email login, invalid password, missing password, wrong headers
+test_api_login_data = [
+    ({"login": "mergin", "password": "ilovemergin"}, json_headers, 200),
+    ({"login": "mergin@mergin.com", "password": "ilovemergin"}, json_headers, 200),
+    ({"login": "mergin", "password": "ilovemergi"}, json_headers, 401),
+    ({"login": "mergin"}, json_headers, 400),
+    ({"login": "mergin", "password": "ilovemergin"}, {}, 415),
+]
+
+
+@pytest.mark.parametrize("data,headers,expected", test_api_login_data)
+def test_api_login(client, data, headers, expected):
+    resp = client.post("/v1/auth/login", data=json.dumps(data), headers=headers)
+    assert resp.status_code == expected
+    if expected == 200:
+        user = User.query.filter_by(username=DEFAULT_USER[0]).first()
+        login_history = (
+            LoginHistory.query.filter_by(user_id=user.id)
+            .order_by(desc(LoginHistory.timestamp))
+            .first()
+        )
+        assert login_history
+        assert user.last_signed_in == login_history.timestamp
+
+
+@pytest.mark.parametrize(
+    "ua", ["DB-sync/0.1", "media-sync/1.0", "work-packages-agent/2.0", "db-sync/0.1"]
+)
+def test_api_login_excluded_user_agent(client, ua):
+    """Logins from user agents on the LOGIN_HISTORY_EXCLUDED_USER_AGENTS list (matched
+    case-insensitively as a substring) are not recorded in LoginHistory"""
+    with patch("mergin.auth.models.get_user_agent") as mock:
+        mock.return_value = ua
+        user_before = User.query.filter_by(username=DEFAULT_USER[0]).first()
+        last_signed_in_before = user_before.last_signed_in
+        resp = client.post(
+            "/v1/auth/login",
+            data=json.dumps({"login": "mergin", "password": "ilovemergin"}),
+            headers=json_headers,
+        )
+        assert resp.status_code == 200
+        user = User.query.filter_by(username=DEFAULT_USER[0]).first()
+        login_history = LoginHistory.query.filter_by(user_id=user.id).first()
+        assert login_history is None
+        assert user.last_signed_in == last_signed_in_before
+
+
+def test_api_login_from_urllib(client):
+    """Non-excluded clients are recorded in LoginHistory just like any other client,
+    to keep a full picture of login activity (including for lockout purposes)."""
+    with patch("mergin.auth.models.get_user_agent") as mock:
+        mock.return_value = "python-urllib/3.9"
+        resp = client.post(
+            "/v1/auth/login",
+            data=json.dumps({"login": "mergin", "password": "ilovemergin"}),
+            headers=json_headers,
+        )
+        assert resp.status_code == 200
+        user = User.query.filter_by(username=DEFAULT_USER[0]).first()
+        login_history = (
+            LoginHistory.query.filter_by(user_id=user.id)
+            .order_by(desc(LoginHistory.timestamp))
+            .first()
+        )
+        assert login_history
+        assert login_history.successful
+        assert user.last_signed_in == login_history.timestamp
+
+
+def test_api_user_profile(client):
+    """tests public API endpoint to get user details"""
+    resp = client.get("/v1/user/mergin")
+    assert resp.status_code == 401
+
+    login_as_admin(client)
+    resp = client.get("/v1/user/mergin")
+    assert resp.status_code == 200
+    assert resp.json["username"] == "mergin"
+    assert resp.json["organisations"] == {
+        test_workspace_name: "owner"
+    }  # default workspace
+    # tests legacy properties are in response
+    for key in ["storage", "storage_limit", "disk_usage"]:
+        assert key in resp.json
+
+
+def test_update_user(client, monkeypatch):
+    login_as_admin(client)
+    user = User.query.filter_by(username="mergin").first()
+    data = {"active": True, "is_admin": True}
+    resp = client.patch(
+        url_for("/.mergin_auth_controller_update_user", username=user.username),
+        data=json.dumps(data),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+    assert user.active
+    assert user.is_admin
+
+    monkeypatch.setitem(
+        client.application.config, "ENABLE_SUPERADMIN_ASSIGNMENT", False
+    )
+    data = {"active": False, "is_admin": False}
+    resp = client.patch(
+        url_for("/.mergin_auth_controller_update_user", username=user.username),
+        data=json.dumps(data),
+        headers=json_headers,
+    )
+    assert resp.status_code == 400
+    assert user.active
+    data = {"active": False}
+    resp = client.patch(
+        url_for("/.mergin_auth_controller_update_user", username=user.username),
+        data=json.dumps(data),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+    assert not user.active
+
+    monkeypatch.setitem(client.application.config, "ENABLE_SUPERADMIN_ASSIGNMENT", True)
+    user.is_admin = False
+    db.session.add(user)
+    db.session.commit()
+    resp = client.patch(
+        url_for("/.mergin_auth_controller_update_user", username=user.username),
+        data=json.dumps(data),
+        headers=json_headers,
+    )
+    # user is deactivated, so session is rejected before permission check
+    assert resp.status_code == 401
+
+
+def test_update_user_profile(client):
+    login_as_admin(client)
+    user = User.query.filter_by(username="mergin").first()
+    user.verified_email = True
+
+    user2 = User("tests", "m@m.com", "testspass", False)
+    db.session.add(user2)
+    db.session.commit()
+    assert user.profile.receive_notifications
+    assert user.verified_email
+
+    # update profile
+    resp = client.post(
+        url_for("/.mergin_auth_controller_update_user_profile"),
+        data=json.dumps({"email": "m@m.com"}),
+        headers=json_headers,
+    )
+    assert resp.status_code == 400
+    assert "Email already exists" in resp.json.get("email")
+
+    # update profile
+    resp = client.post(
+        url_for("/.mergin_auth_controller_update_user_profile"),
+        data=json.dumps(
+            {"first_name": "  John", "last_name": "Doe ", "email": "john@doe.com "}
+        ),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+    assert user.email == "john@doe.com"
+    assert user.profile.first_name == "John"
+    assert user.profile.last_name == "Doe"
+
+    # update profile
+    resp = client.post(
+        url_for("/.mergin_auth_controller_update_user_profile"),
+        data=json.dumps(
+            {"receive_notifications": False, "email": "changed_email@mergin.co.uk"}
+        ),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+
+    user = User.query.filter_by(username="mergin").first()
+    assert not user.profile.receive_notifications
+    assert not user.verified_email
+    assert user.email == "changed_email@mergin.co.uk"
+
+    #  do not allow to update sso user
+    sso_user = add_user("sso_user", "sso")
+    login(client, sso_user.username, "sso")
+    sso_user.passwd = None
+    db.session.add(sso_user)
+    db.session.commit()
+    resp = client.post(
+        url_for("/.mergin_auth_controller_update_user_profile"),
+        data=json.dumps({"email": "changed_email@sso.co.uk"}),
+        headers=json_headers,
+    )
+    assert resp.status_code == 403
+
+
+def test_search_user(client):
+    user = User.query.filter_by(username="mergin").first()
+
+    # query without workspace
+    assert client.get("/app/auth/user/search").status_code == 400
+
+    # anonymous user
+    assert client.get("/app/auth/user/search?namespace=tests").status_code == 401
+
+    login_as_admin(client)
+    # not existing workspace
+    assert client.get("/app/auth/user/search?namespace=tests").status_code == 404
+
+    ws = client.application.config["GLOBAL_WORKSPACE"]
+    # no query params to filter users
+    resp = client.get(f"/app/auth/user/search?namespace={ws}")
+    assert resp.status_code == 200
+    assert len(resp.json) == 0
+
+    add_user("fero.mrkva", "tests")
+    add_user("palomrmrkva", "tests")
+    add_user("mrkvajozef", "tests")
+    add_user("mrk", "tests")
+    url = f"/app/auth/user/search?namespace={ws}"
+    resp = client.get(url + "&like=erg")
+    assert "mer" in resp.json[0]["username"]
+    assert set(resp.json[0].keys()) == {"id", "name", "username", "email"}
+
+    # search by email
+    resp = client.get(url + f"&like={user.email}")
+    assert resp.json[0]["username"] == "mergin"
+    resp = client.get(url + "&like=@mergin.com")
+    assert len(resp.json) == 5  # all users since this is default domain
+
+    # all search levels (1. exact 2. prefix, 3. word start 4. anywhere)
+    resp = client.get(url + "&like=mrk")
+    assert "mrk" in resp.json[0]["username"]
+    assert "mrkvajozef" in resp.json[1]["username"]
+    assert "fero.mrkva" in resp.json[2]["username"]
+    assert "palomrmrkva" in resp.json[3]["username"]
+    assert 4 == len(resp.json)
+
+    # search levels without exact (1. prefix, 2. word start 3. anywhere)
+    resp = client.get(url + "&like=mrkv")
+    assert "mrkvajozef" in resp.json[0]["username"]
+    assert "fero.mrkva" in resp.json[1]["username"]
+    assert "palomrmrkva" in resp.json[2]["username"]
+    assert 3 == len(resp.json)
+
+    # just exact search level
+    resp = client.get(url + "&like=mrkvajozef")
+    assert "mrkvajozef" in resp.json[0]["username"]
+    assert 1 == len(resp.json)
+
+    # just prefix search level
+    resp = client.get(url + "&like=palo")
+    assert "palomrmrkva" in resp.json[0]["username"]
+    assert 1 == len(resp.json)
+
+    # just word start search level
+    resp = client.get(url + "&like=.mrk")
+    assert "fero.mrkva" in resp.json[0]["username"]
+    assert 1 == len(resp.json)
+
+    # just anywhere search level
+    resp = client.get(url + "&like=kva")
+    assert "fero.mrkva" in resp.json[0]["username"]
+    assert "mrkvajozef" in resp.json[1]["username"]
+    assert "palomrmrkva" in resp.json[2]["username"]
+    assert 3 == len(resp.json)
+
+    resp = client.get(url + f"&id={user.id}")
+    assert resp.json[0]["username"] == user.username
+
+    resp = client.get(url + f"&names={user.username}")
+    assert resp.json[0]["username"] == user.username
+
+    # no such user
+    resp = client.get(url + "&like=tests")
+    assert len(resp.json) == 0
+
+    # invalid query par
+    resp = client.get(url + f"&id=1,a")
+    assert len(resp.json) == 0
+
+
+def test_csrf_refresh_token(client):
+    resp = client.get(url_for("/.mergin_auth_controller_refresh_csrf_token"))
+    assert resp.status_code == 401
+
+    login_as_admin(client)
+    resp = client.get(url_for("/.mergin_auth_controller_refresh_csrf_token"))
+    assert resp.json["csrf"]
+
+
+def test_close_user_account(client):
+    """Test closing user account via public API call and admin actions to enable/ban user"""
+    username = "alice"
+    user = add_user(username, "pwd")
+    login(client, username, "pwd")
+    # user closes account
+    resp = client.delete("/v1/user")
+    assert resp.status_code == 204
+    assert user.active is False
+    assert user.inactive_since
+    # login is not possible
+    assert (
+        client.post(
+            url_for("/.mergin_auth_controller_login"),
+            data=json.dumps({"login": user.username, "password": "pwd"}),
+            headers=json_headers,
+        ).status_code
+        == 401
+    )
+
+    login_as_admin(client)
+    # email is still occupied
+    data = {
+        "username": user.username + "_new",
+        "email": user.email,
+        "password": "Pwd123###",
+        "confirm": "Pwd123###",
+    }
+    assert (
+        client.post(
+            url_for("/.mergin_auth_controller_register_user"),
+            data=json.dumps(data),
+            headers=json_headers,
+        ).status_code
+        == 400
+    )
+
+    resp = client.get(
+        url_for("/.mergin_auth_controller_get_user", username=user.username)
+    )
+    assert resp.json["scheduled_removal"]
+
+    # admin can re-enable account
+    resp = client.patch(
+        url_for("/.mergin_auth_controller_update_user", username=user.username),
+        data=json.dumps({"active": True}),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+    assert user.active is True
+    assert not user.inactive_since
+    # admin can ban user
+    resp = client.patch(
+        url_for("/.mergin_auth_controller_update_user", username=user.username),
+        data=json.dumps({"active": False}),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+    assert user.active is False
+    assert not user.inactive_since
+    # admin can force delete user
+    resp = client.delete(
+        url_for("/.mergin_auth_controller_delete_user", username=username)
+    )
+    assert resp.status_code == 204
+    assert not User.query.filter_by(username=username).first()
+    assert user.username.startswith("deleted_") and not user.active
+
+    user = User.query.filter_by(username=DEFAULT_USER[0]).first()
+    # check default project
+    project = Project.query.filter_by(workspace_id=test_workspace_id).first()
+    assert project.get_role(user.id) is ProjectRole.OWNER
+
+    resp = client.delete("/v1/user")
+    assert resp.status_code == 204
+    user = User.query.filter_by(username=DEFAULT_USER[0]).first()
+    # tests only basic functionality - inactivate user and project
+    # more complex testing is done in close mergin account tests case
+    assert not user.active
+    assert user.inactive_since
+    assert (
+        project.project_users == []
+    )  # project will be removed by cron job, but is not accessible
+
+    # login should fail now
+    data = {"login": DEFAULT_USER[0], "password": DEFAULT_USER[1]}
+    resp = client.post("/v1/auth/login", data=json.dumps(data), headers=json_headers)
+    assert resp.status_code == 401
+
+    # mimic expiry, call celery job and check user is gone
+    user.inactive_since = datetime.today() - timedelta(
+        client.application.config["ACCOUNT_EXPIRATION"] + 1
+    )
+    db.session.commit()
+    users_number = User.query.count()
+    anonymize_removed_users()
+    assert not User.query.filter_by(username=DEFAULT_USER[0]).first()
+    assert User.query.count() == users_number
+
+
+def test_paginate_users(client):
+    """Test admin paginate user endpoint"""
+    add_user("alice", "tests")  # 2
+    add_user("bob", "tests")  # 3
+    # username starts 'deleted_' but is active -> should be listed
+    deleted_active = add_user("deleted_active", "tests")  # 4
+    # user is inactive but username does not start 'deleted_' -> should be listed
+    user_inactive = add_user("user_inactive", "user_inactive")  # 5
+    user_inactive.active = False
+    db.session.commit()
+    # username starts 'deleted_' and is inactive -> should not be listed
+    deleted_inactive = add_user("deleted_inactive", "deleted_inactive")  # not listed
+    deleted_inactive.active = False
+    db.session.commit()
+    login(client, *DEFAULT_USER)
+    url = "/app/admin/users?page=1&per_page=10"
+    # get 5 users (default + 5 new added - 1 deleted & inactive)
+    resp = client.get(url)
+    list_of_usernames = [user["username"] for user in resp.json["items"]]
+    assert resp.json["count"] == 5
+    assert resp.json["items"][0]["username"] == "mergin"
+    assert user_inactive.username in list_of_usernames
+    assert deleted_active.username in list_of_usernames
+    assert deleted_inactive.username not in list_of_usernames
+    # order by username
+    resp = client.get(url + "&order_by=username")
+    assert resp.json["count"] == 5
+    assert resp.json["items"][0]["username"] == "alice"
+    # exact match with username
+    resp = client.get(url + "&like=bob")
+    assert resp.json["count"] == 1
+    assert resp.json["items"][0]["username"] == "bob"
+    # ilike search with email
+    resp = client.get(url + "&like=@mergin.com")
+    assert resp.json["count"] == 5
+    # exact search by email
+    resp = client.get(url + "&like=alice@mergin.com")
+    assert resp.json["count"] == 1
+    assert resp.json["items"][0]["username"] == "alice"
+    # invalid paging
+    assert client.get("/app/admin/users?page=2&per_page=10").status_code == 404
+
+
+def test_user_info(client):
+    """Test user profile of logged-in user"""
+    login(client, *DEFAULT_USER)
+    resp = client.get("/v1/user/profile")
+    assert resp.json["username"] == DEFAULT_USER[0]
+    assert len(resp.json["workspaces"]) == 1
+    assert resp.json["preferred_workspace"] == 1
+    assert len(resp.json["invitations"]) == 0
+    # make sure there is no private information
+    assert "passwd" not in resp.json
+
+
+# login tests: success, success with email login, invalid password, missing password, not admin user
+test_admin_login_data = [
+    ({"login": "mergin", "password": "ilovemergin"}, 200),
+    ({"login": "mergin@mergin.com", "password": "ilovemergin"}, 200),
+    ({"login": "mergin", "password": "ilovemergi"}, 401),
+    ({"login": "mergin"}, 400),
+    ({"login": "user", "password": "user"}, 403),
+]
+
+
+@pytest.mark.parametrize("data,expected", test_admin_login_data)
+def test_admin_login(client, data, expected):
+    add_user("user", "user")
+    resp = client.post("/app/admin/login", data=json.dumps(data), headers=json_headers)
+    assert resp.status_code == expected
+
+
+def test_update_project_v2(client):
+    project = Project.query.filter_by(
+        workspace_id=test_workspace_id, name=test_project
+    ).first()
+    data = {"name": "new_project_name"}
+    resp = client.patch(f"v2/projects/{project.id}", json=data)
+    assert resp.status_code == 401
+    user = add_user("test", "test")
+    login(client, "test", "test")
+    resp = client.patch(f"v2/projects/{project.id}", json=data)
+    assert resp.status_code == 403
+    login_as_admin(client)
+    resp = client.patch(f"v2/projects/{project.id}", json=data)
+    assert resp.status_code == 204
+
+
+@patch("mergin.celery.send_email_async.apply_async")
+def test_add_user(send_email_mock, client):
+    """Test adding new user via public endpoint"""
+    login_as_admin(client)
+    data = {
+        "username": "test_user",
+        "email": "test@test.com",
+        "password": "#pwd1234",
+        "role": "reader",
+        "workspace_id": test_workspace_id,
+    }
+    response = client.post("/v2/users", json=data)
+    assert response.status_code == 201
+    assert response.json["username"] == "test_user"
+    assert response.json["email"] == "test@test.com"
+    assert response.json["receive_notifications"] is False
+    assert not send_email_mock.called
+
+    # drop required attribute
+    data.pop("email")
+    assert client.post("/v2/users", json=data).status_code == 400
+
+    # try register with the same account again
+    data["email"] = "test@test.com"
+    assert client.post("/v2/users", json=data).status_code == 400
+
+    # register with optional flag sent but username missing
+    data["email"] = "test2@test.com"
+    data.pop("username")
+    data["notify_user"] = True
+    response = client.post("/v2/users", json=data)
+    assert response.status_code == 201
+    assert response.json["receive_notifications"] is True
+    assert response.json["username"] == "test2"  # autogenerated from email
+    assert send_email_mock.called
+    assert send_email_mock.call_args.args[1]["subject"] == "Invitation to Mergin Maps"
+
+    # ordinary user cannot add others
+    login(client, "test2", "#pwd1234")
+    assert client.post("/v2/users", json=data).status_code == 403
+
+
+def test_username_generation(client):
+    """Test generation of username from email"""
+    assert User.generate_username("tralala@example.com") == "tralala"
+    assert User.generate_username("TraLala@example.com") == "tralala"
+    assert User.generate_username("tralala") is None
+
+    # add user to test autoincrement
+    user = add_user("user", "user")
+    assert User.generate_username(user.email) == user.username + "1"
+
+    user = add_user("user25", "user")
+    assert User.generate_username(user.email) == user.username + "1"
+
+    # generate username from email containing invalid chars for username, e.g. +
+    assert User.generate_username("tralala+test@example.com") == "tralalatest"
+
+    # generate username from short email
+    user = add_user("t000", "user")
+    assert User.generate_username("t@example.com") == "t0001"
+    assert User.generate_username("t11@example.com") == "t110"
+
+    user = add_user("support1", "user")
+    assert User.generate_username("support@example.com") == "support0"
+
+    # test long emails
+    username = "a" * 25
+    assert User.generate_username(f"{username}@example.com") == username
+    # shortened version
+    username = "a" * 50
+    assert User.generate_username(f"{username}@example.com") == username[:47]
+
+    # test username generation with existing user, case insensitive
+    user = add_user("Testuser")
+    assert User.generate_username("Testuser@example.com") == "testuser1"
+    assert User.generate_username("testuser@example.com") == "testuser1"
+    user = add_user("testuser1")
+    assert User.generate_username("Testuser@example.com") == "testuser2"
+
+    # test username with crazy long int suffix
+    user = add_user("testuser13120931904")
+    assert User.generate_username("Testuser@example.com") == "testuser13120931905"
+
+
+def test_server_usage(client):
+    """Test server usage endpoint"""
+    login_as_admin(client)
+    workspace = create_workspace()
+    init_project = Project.query.filter_by(workspace_id=workspace.id).first()
+    user = add_user()
+    admin = User.query.filter_by(username="mergin").first()
+    # create new project
+    project = create_project("project", workspace, admin)
+    project.set_role(user.id, ProjectRole.READER)
+    db.session.commit()
+    upload_file_to_project(project, "test.txt", client)
+    resp = client.get("/app/admin/usage")
+    assert resp.status_code == 200
+    assert resp.json["users"] == 2
+    assert resp.json["workspaces"] == 1
+    assert resp.json["projects"] == 2
+    assert resp.json["storage"] == project.disk_usage + init_project.disk_usage
+    assert resp.json["active_monthly_contributors"] == 1
+    assert resp.json["editors"] == 1
+    project.set_role(user.id, ProjectRole.EDITOR)
+    db.session.commit()
+    resp = client.get("/app/admin/usage")
+    assert resp.json["editors"] == 2
+    user.inactivate()
+    user.anonymize()
+    project.delete()
+    resp = client.get("/app/admin/usage")
+    assert resp.json["editors"] == 1
+    assert resp.json["users"] == 1
+    assert resp.json["projects"] == 1
+
+
+user_data = [
+    ("user1", True),  # no problem
+    ("日人日本人", True),  # non-ascii character
+    ("usér", True),  # non-ascii character
+    ("user\\", False),  # disallowed character
+    ("user\260", False),  # not letter character (°)
+    ("user|", False),  # vertical bar
+    ("us er", False),  # space in the middle
+    ("us,er", False),  # comma
+    ("us—er", False),  # dash
+    ("us´er", False),  # acute accent
+    (" user", True),  # starting with space (will be stripped)
+    ("us.er", True),  # dot in the middle
+    (".user", False),  # starting with dot
+    ("us-er", True),  # hyphen
+]
+
+
+@pytest.mark.parametrize("username,is_valid", user_data)
+def test_email_format_validation(app, username, is_valid):
+    """Test email form format validation"""
+    email = username + "@email.com"
+    with app.test_request_context(method="POST"):
+        form = ResetPasswordForm(
+            data={"email": email}
+        )  # ResetPasswordForm has only email field
+        assert form.validate() == is_valid
+
+
+def test_login_without_password(client):
+    """Test password check as SSO user which does not have password"""
+    login_as_admin(client)
+    username = "sso_user"
+    user = add_user(username=username, password="")
+    assert user.passwd is None
+    for pwd in ["Il0vemergin", ""]:
+        resp = client.post(
+            url_for("/.mergin_auth_controller_login"),
+            data=json.dumps({"login": username, "password": pwd}),
+            headers=json_headers,
+        )
+        assert resp.status_code == 401
+
+
+def test_bearer_token_expiration(app):
+    """Test bearer token expiration in decode function"""
+    secret = app.config["SECRET_KEY"]
+    salt = app.config["SECURITY_BEARER_SALT"]
+    client = app.test_client()
+    user = User.query.first()
+
+    # valid token with longer expiration then usual
+    expire = datetime.now(timezone.utc) + timedelta(
+        seconds=2 * app.config["BEARER_TOKEN_EXPIRATION"]
+    )
+    token_data = {
+        "user_id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "expire": str(expire),
+    }
+
+    token = encode_token(secret, salt, token_data)
+    data = decode_token(secret, salt, token)
+    assert data["expire"] == str(expire)
+
+    # try to login
+    resp = client.get(
+        "/v1/user/profile", headers={**json_headers, "Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+    client.get(url_for("/.mergin_auth_controller_logout"))
+
+    # expired token
+    expire = datetime.now(timezone.utc) - timedelta(days=1)
+    token_data["expire"] = str(expire)
+    token = encode_token(secret, salt, token_data)
+
+    with pytest.raises(itsdangerous.exc.SignatureExpired):
+        decode_token(secret, salt, token)
+
+    resp = client.get(
+        "/v1/user/profile", headers={**json_headers, "Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 401
+
+    # invalid token
+    token_data["expire"] = 123
+    token = encode_token(secret, salt, token_data)
+    with pytest.raises(itsdangerous.exc.BadSignature):
+        decode_token(secret, salt, token)
+
+    resp = client.get(
+        "/v1/user/profile", headers={**json_headers, "Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 401
+
+
+def _api_token(client, username, password):
+    resp = client.post(
+        "/v1/auth/login",
+        data=json.dumps({"login": username, "password": password}),
+        headers=json_headers,
+    )
+    assert resp.status_code == 200
+    return resp.json["session"]["token"]
+
+
+def _profile_status(client, token=None):
+    headers = {**json_headers}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    # fresh app context, so flask-login does not reuse user cached in g by previous request
+    with client.application.app_context():
+        return client.get("/v1/user/profile", headers=headers).status_code
+
+
+def test_password_change_revokes_sessions(app):
+    """Password change invalidates other sessions and bearer tokens, but not the current session"""
+    user = add_user("revokeuser", "oldpassword")
+    current_session = app.test_client()
+    other_session = app.test_client()
+    api_client = app.test_client()
+    login(current_session, user.username, "oldpassword")
+    login(other_session, user.username, "oldpassword")
+    token = _api_token(api_client, user.username, "oldpassword")
+    assert _profile_status(other_session) == 200
+    assert _profile_status(api_client, token) == 200
+
+    resp = current_session.post(
+        url_for("/.mergin_auth_controller_change_password"),
+        json={
+            "old_password": "oldpassword",
+            "password": "changed#1",
+            "confirm": "changed#1",
+        },
+    )
+    assert resp.status_code == 200
+    assert user.auth_version == 1
+    assert _profile_status(current_session) == 200
+    assert _profile_status(other_session) == 401
+    assert _profile_status(api_client, token) == 401
+
+    # login with new credentials works
+    new_token = _api_token(api_client, user.username, "changed#1")
+    assert _profile_status(api_client, new_token) == 200
+    login(other_session, user.username, "changed#1")
+    assert _profile_status(other_session) == 200
+
+
+def test_password_change_with_bearer_token(app):
+    """Password change through bearer token does not create session cookie, caller needs to log in again"""
+    user = add_user("revokeuser", "oldpassword")
+    api_client = app.test_client()
+    token = _api_token(api_client, user.username, "oldpassword")
+    resp = api_client.post(
+        url_for("/.mergin_auth_controller_change_password"),
+        json={
+            "old_password": "oldpassword",
+            "password": "changed#1",
+            "confirm": "changed#1",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert "Set-Cookie" not in resp.headers
+    assert _profile_status(api_client, token) == 401
+
+
+def test_password_reset_revokes_sessions(app, client):
+    """Password reset invalidates all sessions and bearer tokens"""
+    user = add_user("revokeuser", "oldpassword")
+    web_session = app.test_client()
+    login(web_session, user.username, "oldpassword")
+    token = _api_token(client, user.username, "oldpassword")
+
+    reset_token = generate_password_reset_token(app, user)
+    db.session.commit()
+    assert _confirm_new_password(client, reset_token).status_code == 200
+    assert user.auth_version == 1
+    assert _profile_status(web_session) == 401
+    assert _profile_status(client, token) == 401
+
+
+def test_legacy_sessions_accepted_until_revoked(app):
+    """Session cookies and bearer tokens issued before auth version was introduced are valid until password change"""
+    user = add_user("legacyuser", "password")
+    web_session = app.test_client()
+    with web_session.session_transaction() as sess:
+        sess["_user_id"] = str(user.id)
+        sess["_fresh"] = True
+    legacy_token = encode_token(
+        app.config["SECRET_KEY"],
+        app.config["SECURITY_BEARER_SALT"],
+        {
+            "user_id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "expire": str(datetime.now(timezone.utc) + timedelta(hours=1)),
+        },
+    )
+    api_client = app.test_client()
+    assert _profile_status(web_session) == 200
+    assert _profile_status(api_client, legacy_token) == 200
+
+    user.revoke_sessions()
+    db.session.commit()
+    assert _profile_status(web_session) == 401
+    assert _profile_status(api_client, legacy_token) == 401

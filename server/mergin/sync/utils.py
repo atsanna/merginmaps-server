@@ -1,0 +1,634 @@
+# Copyright (C) Lutra Consulting Limited
+#
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
+
+from __future__ import annotations
+import logging
+import math
+import os
+import hashlib
+import re
+import secrets
+from binaryornot.check import is_binary
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from threading import Timer
+from urllib.parse import quote
+from uuid import UUID
+from shapely import wkb
+from shapely.errors import ShapelyError
+from gevent import sleep
+from flask import Request, Response, make_response, send_from_directory
+from typing import List, Optional
+from flask import Request
+from typing import Optional
+from sqlalchemy import text
+from pathvalidate import (
+    validate_filename,
+    ValidationError,
+    is_valid_filepath,
+    is_valid_filename,
+)
+import magic
+from flask import current_app
+from pathlib import Path
+
+from .config import Configuration
+from ..utils import format_time_delta
+
+# log base for caching strategy, diff checkpoints, etc.
+LOG_BASE = 4
+
+
+def generate_checksum(file, chunk_size=4096):
+    """
+    Generate checksum for file from chunks.
+
+    :param file: file to calculate checksum
+    :param chunk_size: size of chunk
+    :return: sha1 checksum
+    """
+    checksum = hashlib.sha1()
+    with open(file, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            sleep(0)  # to unblock greenlet
+            if not chunk:
+                return checksum.hexdigest()
+            checksum.update(chunk)
+
+
+def is_qgis(path: str) -> bool:
+    """
+    Check if file is a QGIS project file.
+    """
+    _, ext = os.path.splitext(path)
+    return ext.lower() in [".qgs", ".qgz"]
+
+
+def is_versioned_file(file):
+    """Check if file is compatible with geodiff lib and hence suitable for versioning."""
+    diff_extensions = [".gpkg", ".sqlite"]
+    f_extension = os.path.splitext(file)[1]
+    return f_extension.lower() in diff_extensions
+
+
+def is_file_name_blacklisted(path, blacklist):
+    blacklisted_dirs = get_blacklisted_dirs(blacklist)
+    blacklisted_files = get_blacklisted_files(blacklist)
+    if blacklisted_dirs:
+        regexp_dirs = re.compile(
+            r"({})".format(
+                "|".join(".*" + re.escape(x) + ".*" for x in blacklisted_dirs)
+            )
+        )
+        if regexp_dirs.search(os.path.dirname(path)):
+            return True
+    if blacklisted_files:
+        regexp_files = re.compile(
+            r"({})".format(
+                "|".join(".*" + re.escape(x) + ".*" for x in blacklisted_files)
+            )
+        )
+        if regexp_files.search(os.path.basename(path)):
+            return True
+
+    return False
+
+
+def get_blacklisted_dirs(blacklist):
+    return [p.replace("/", "") for p in blacklist if p.endswith("/")]
+
+
+def get_blacklisted_files(blacklist):
+    return [p for p in blacklist if not p.endswith("/")]
+
+
+def generate_location():
+    """Return random location where project is saved on disk
+
+    Example:
+        >>> generate_location()
+        '1c/624c6af4d6d2710bbfe1c128e8ca267b'
+    """
+    return os.path.join(secrets.token_hex(1), secrets.token_hex(16))
+
+
+def project_name_conflict_message(project) -> str:
+    """Return error message for a new project clashing with an existing project name"""
+    if project.removed_at:
+        return (
+            f"Project with the same name is scheduled for deletion, "
+            f"you can create a project with this name in {format_time_delta(project.expiration)}"
+        )
+    return "Project with the same name already exists"
+
+
+def is_valid_uuid(uuid):
+    """Check object can be parse as valid UUID"""
+    try:
+        UUID(uuid)
+        return True
+    except (ValueError, AttributeError):
+        return False
+
+
+def wkb2wkt(wkb_geom: bytes) -> str | None:
+    """Convert WKB to WKT"""
+    try:
+        wkt = wkb.loads(wkb_geom).wkt
+    except ShapelyError:
+        wkt = None
+    return wkt
+
+
+def get_byte_string(size_bytes):
+    """Return string of size_bytes in string
+
+    :param size_bytes: size_bytes to string.
+    :type size_bytes: int
+
+    :return: size bytes in string.
+    :rtype: str
+    """
+
+    if size_bytes == 0:
+        return "0B"
+    size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    power = math.pow(1024, i)
+    size = round(size_bytes / power, 2)
+    return "%s %s" % (size, size_name[i])
+
+
+def convert_byte(size_bytes, unit):
+    """Convert byte into other unit
+
+    :param size_bytes: size_bytes to target.
+    :type size_bytes: int
+
+    :param unit: target unit .
+    :type unit: str
+
+    :return: size in target unit.
+    :rtype: float
+    """
+
+    if size_bytes == 0:
+        return "0B"
+    units = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"]
+    i = 0
+    try:
+        i = units.index(unit.upper())
+    except ValueError:
+        pass
+    if i > 0:
+        power = math.pow(1024, i)
+        size_bytes = round(size_bytes / power, 2)
+    return size_bytes
+
+
+def is_reserved_word(name: str) -> str | None:
+    """Check if name is reserved in system"""
+    reserved = r"^support$|^helpdesk$|^merginmaps$|^lutraconsulting$|^mergin$|^lutra$|^input$|^admin$|^sales$"
+    if re.match(reserved, name) is not None:
+        return "The provided value is invalid."
+    return None
+
+
+def has_valid_characters(name: str) -> str | None:
+    """Check if name contains only valid characters"""
+    if re.match(r"^[\w\s\-\.]+$", name) is None:
+        return "Please use only alphanumeric or the following -_. characters."
+    return None
+
+
+def has_valid_first_character(name: str) -> str | None:
+    """Check if name contains only valid characters in first position"""
+    if re.match(r"^[\s.].*$", name) is not None:
+        return f"Value can not start with space or dot."
+    return None
+
+
+def check_filename(name: str) -> str | None:
+    """Check if name contains only valid characters for filename"""
+    error = None
+    try:
+        validate_filename(name)
+    except ValidationError:
+        error = "The provided value is invalid."
+    return error
+
+
+def workspace_names(workspaces):
+    """Helper to extract only names from list of workspaces"""
+    return list(map(lambda x: x.name, workspaces))
+
+
+def workspace_ids(workspaces):
+    """Helper to extract only ids from list of workspaces"""
+    return list(map(lambda x: x.id, workspaces))
+
+
+def get_project_path(project):
+    """Create path for the project."""
+    project_path = project.workspace.name + "/" + project.name
+    return project_path
+
+
+def split_project_path(project_path):
+    """Extract workspace and project names out of path."""
+    workspace_name, project_name = project_path.split("/")
+    return workspace_name, project_name
+
+
+def files_size():
+    """Get total size of all files"""
+    from mergin.app import db
+
+    files_size = text(
+        f"""
+        WITH partials AS (
+            WITH latest_files AS (
+                SELECT distinct unnest(file_history_ids) AS file_id
+                FROM latest_project_files pf
+            )
+            SELECT
+                SUM(size)
+            FROM file_history
+            WHERE change = 'create'::push_change_type OR change = 'update'::push_change_type
+            UNION
+            SELECT
+                SUM(size)
+            FROM file_diff
+            UNION
+            SELECT
+                SUM(size)
+            FROM latest_files lf
+            LEFT OUTER JOIN file_history fh ON fh.id = lf.file_id
+            WHERE fh.change = 'update_diff'::push_change_type
+        )
+        SELECT COALESCE(SUM(sum), 0) FROM partials;
+        """
+    )
+    return db.session.execute(files_size).scalar()
+
+
+def is_valid_path(filepath: str) -> bool:
+    """Check filepath and filename for invalid characters, absolute path or path traversal"""
+    return (
+        not re.search(r"\.[/\\]", filepath)  # ./ or .\
+        and is_valid_filepath(filepath)  # invalid characters in filepath, absolute path
+        and is_valid_filename(
+            os.path.basename(filepath)
+        )  # invalid characters in filename, reserved filenames
+    )
+
+
+def has_trailing_space(filepath: str) -> bool:
+    """Check filepath for trailing spaces that makes the project impossible to download on Windows"""
+    return any(part != part.rstrip() for part in Path(filepath).parts)
+
+
+def is_supported_extension(filepath) -> bool:
+    """Check whether file's extension is supported."""
+    if check_skip_validation(filepath):
+        return True
+    ext = os.path.splitext(filepath)[1].lower()
+    return ext and ext not in FORBIDDEN_EXTENSIONS
+
+
+FORBIDDEN_EXTENSIONS = {
+    ".ade",
+    ".adp",
+    ".app",
+    ".appcontent-ms",
+    ".application",
+    ".appref-ms",
+    ".asp",
+    ".aspx",
+    ".asx",
+    ".bas",
+    ".bat",
+    ".bgi",
+    ".cab",
+    ".cdxml",
+    ".cer",
+    ".chm",
+    ".cmd",
+    ".cnt",
+    ".com",
+    ".cpl",
+    ".crt",
+    ".csh",
+    ".der",
+    ".diagcab",
+    ".dll",
+    ".drv",
+    ".exe",
+    ".fxp",
+    ".gadget",
+    ".grp",
+    ".hlp",
+    ".hpj",
+    ".hta",
+    ".htc",
+    ".htaccess",
+    ".htpasswd",
+    ".inf",
+    ".ins",
+    ".iso",
+    ".isp",
+    ".its",
+    ".jar",
+    ".jnlp",
+    ".js",
+    ".jse",
+    ".jsp",
+    ".ksh",
+    ".lnk",
+    ".mad",
+    ".maf",
+    ".mag",
+    ".mam",
+    ".maq",
+    ".mar",
+    ".mas",
+    ".mat",
+    ".mau",
+    ".mav",
+    ".maw",
+    ".mcf",
+    ".mda",
+    ".mdb",
+    ".mde",
+    ".mdt",
+    ".mdw",
+    ".mdz",
+    ".msc",
+    ".mht",
+    ".mhtml",
+    ".msh",
+    ".msh1",
+    ".msh2",
+    ".mshxml",
+    ".msh1xml",
+    ".msh2xml",
+    ".msi",
+    ".msp",
+    ".mst",
+    ".msu",
+    ".ops",
+    ".osd",
+    ".pcd",
+    ".pif",
+    ".pl",
+    ".plg",
+    ".prf",
+    ".prg",
+    ".printerexport",
+    ".ps1",
+    ".ps1xml",
+    ".ps2",
+    ".ps2xml",
+    ".psc1",
+    ".psc2",
+    ".psd1",
+    ".psdm1",
+    ".pssc",
+    ".pst",
+    ".py",
+    ".pyc",
+    ".pyo",
+    ".pyw",
+    ".pyz",
+    ".pyzw",
+    ".reg",
+    ".scf",
+    ".scr",
+    ".sct",
+    ".settingcontent-ms",
+    ".sh",
+    ".shb",
+    ".shs",
+    ".sys",
+    ".theme",
+    ".tmp",
+    ".torrent",
+    ".url",
+    ".vb",
+    ".vbe",
+    ".vbp",
+    ".vbs",
+    ".vhd",
+    ".vhdx",
+    ".vsmacros",
+    ".vsw",
+    ".webpnp",
+    ".website",
+    ".ws",
+    ".wsb",
+    ".wsc",
+    ".wsf",
+    ".wsh",
+    ".xbap",
+    ".xll",
+    ".xnk",
+}
+
+
+def check_skip_validation(file_path: str) -> bool:
+    """
+    Check if we can skip validation for this file path.
+    Some files are allowed even if they have forbidden extension or mime type.
+    """
+    file_name = os.path.basename(file_path)
+    if file_name in Configuration.UPLOAD_FILES_WHITELIST:
+        return True
+    ext = os.path.splitext(file_path)[1].lower()
+    return ext in {e.lower() for e in Configuration.UPLOAD_EXTENSIONS_WHITELIST}
+
+
+FORBIDDEN_MIME_TYPES = {
+    "application/x-msdownload",
+    "application/x-sh",
+    "application/x-bat",
+    "application/x-msdos-program",
+    "application/x-dosexec",
+    "application/x-csh",
+    "application/x-perl",
+    "application/javascript",
+    "application/x-python-code",
+    "application/x-ruby",
+    "application/java-archive",
+    "application/vnd.ms-cab-compressed",
+    "application/x-ms-shortcut",
+    "application/vnd.microsoft.portable-executable",
+    "application/x-ms-installer",
+    "application/x-ms-application",
+    "application/x-ms-wim",
+    "text/x-shellscript",
+}
+
+
+def is_supported_type(filepath) -> bool:
+    """Check whether the file mimetype is supported."""
+    if check_skip_validation(filepath):
+        return True
+    mime_type = get_mimetype(filepath)
+    return mime_type.startswith("image/") or mime_type not in FORBIDDEN_MIME_TYPES
+
+
+# libmagic >= 5.46 (e.g. Ubuntu 26.04) reports some types differently than older versions,
+# map them to the older names to keep responses stable regardless of the system libmagic
+MIME_TYPE_ALIASES = {
+    "application/geopackage+sqlite3": "application/vnd.sqlite3",
+}
+
+
+def get_mimetype(filepath: str) -> str:
+    """Identifies file types by checking their headers"""
+    mime_type = magic.from_file(filepath, mime=True)
+    return MIME_TYPE_ALIASES.get(mime_type, mime_type)
+
+
+def get_x_accel_uri(*url_parts):
+    """
+    Constructs a URI for X-Accel redirection based on the provided URL parts. We are using /download in our nginx config for this purpose.
+    Therefore, we need to adjust the path to start with "/download".
+
+    If url_parts starts with LOCAL_PROJECTS path, adjust the path to start with "/download" and remove it from the beginning of the path.
+    Args:
+        *url_parts: parts of the path of the file to be served.
+    Returns:
+        str: A URI string starting with "/download", followed by the joined
+             and adjusted path based on the provided URL parts.
+    Example:
+        Assuming `current_app.config["LOCAL_PROJECTS"]` is set to
+        "/home":
+        >>> get_x_accel_uri("/home", "example", "file.txt")
+        '/download/example/file.txt'
+    """
+    download_accell_uri = "/download"
+    if not url_parts:
+        return download_accell_uri
+
+    local_projects = current_app.config.get("LOCAL_PROJECTS")
+    url = os.path.join(*url_parts)
+    # if the path parts_join starts with local_projects, remove it
+    if url.startswith(local_projects):
+        url = os.path.relpath(url, local_projects)
+    url = url.lstrip(os.path.sep)
+    result = os.path.join(download_accell_uri, url)
+    return result
+
+
+def prepare_download_response(project_dir: str, path: str) -> Response:
+    """Prepare flask response for file download with custom headers"""
+    abs_path = os.path.join(project_dir, path)
+    if current_app.config["USE_X_ACCEL"]:
+        # encoding for nginx to be able to download file with non-ascii chars
+        resp = make_response()
+        resp.headers["X-Accel-Redirect"] = get_x_accel_uri(
+            project_dir, quote(path.encode("utf-8"))
+        )
+        resp.headers["X-Accel-Buffering"] = True
+        resp.headers["X-Accel-Expires"] = "off"
+    else:
+        resp = send_from_directory(
+            os.path.dirname(abs_path), os.path.basename(abs_path)
+        )
+
+    mime_type = "text/plain" if not is_binary(abs_path) else get_mimetype(abs_path)
+    resp.headers["Content-Type"] = mime_type
+    file_name = quote(os.path.basename(path).encode("utf-8"))
+    resp.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{file_name}"
+    resp.direct_passthrough = False
+    return resp
+
+
+@dataclass
+class Checkpoint:
+    """
+    Cached level of version tree.
+    Used as a checkpoint to merge individual versions / diff files into bigger chunks.
+    """
+
+    rank: int  # power of base
+    index: int  # index of level - multiplyer of rank
+
+    def __post_init__(self):
+        if type(self.rank) is not int or type(self.index) is not int:
+            raise ValueError("rank and index must be integers")
+
+        if self.rank < 0 or self.index < 1:
+            raise ValueError("rank must be positive and index starts from 1")
+
+    @property
+    def start(self) -> int:
+        """Start of the range covered by this level"""
+        return 1 + (LOG_BASE**self.rank * (self.index - 1))
+
+    @property
+    def end(self) -> int:
+        """End of the range covered by this level"""
+        return LOG_BASE**self.rank * self.index
+
+    def __str__(self) -> str:
+        return f"Checkpoint(rank={self.rank}, index={self.index}, versions=v{self.start}-v{self.end})"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    @classmethod
+    def get_checkpoints(cls, start: int, end: int) -> List[Checkpoint]:
+        """
+        Get all checkpoints in a range.
+        This basically provide a list of smaller versions (checkpoints) to be merged in order to get the final version.
+        """
+        levels = []
+        while start <= end:
+            if start == end:
+                rank_max = 0
+            else:
+                rank_max = math.floor(math.log(end - start + 1, LOG_BASE))
+            for rank in reversed(range(0, rank_max + 1)):
+                if (start - 1) % LOG_BASE**rank:
+                    continue
+
+                index = (start - 1) // LOG_BASE**rank + 1
+                levels.append(cls(rank=rank, index=index))
+                start = start + LOG_BASE**rank
+                break
+
+        return levels
+
+
+def get_chunk_location(id: str):
+    """
+    Get file location for chunk on FS
+
+    Splits the given identifier into two parts where the first two characters of the identifier are the small hash,
+    and the remaining characters is a file identifier.
+    """
+    chunk_dir = current_app.config.get("UPLOAD_CHUNKS_DIR")
+    small_hash = id[:2]
+    file_name = id[2:]
+    return os.path.join(chunk_dir, small_hash, file_name)
+
+
+def remove_outdated_files(dir: str, time_delta: timedelta):
+    """Remove all files within directory where last access time passed expiration date"""
+    for file in os.listdir(dir):
+        path = os.path.join(dir, file)
+        if not os.path.isfile(path):
+            continue
+
+        if (
+            datetime.fromtimestamp(os.path.getatime(path), tz=timezone.utc)
+            < datetime.now(timezone.utc) - time_delta
+        ):
+            try:
+                os.remove(path)
+            except OSError as e:
+                logging.error(f"Unable to remove {path}: {str(e)}")

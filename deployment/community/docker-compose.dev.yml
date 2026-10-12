@@ -1,0 +1,50 @@
+
+
+services:
+  server:
+    image: server
+    build:
+      context: ../../server
+      dockerfile: Dockerfile
+    env_file:
+      - .prod.env
+      - .dev.env
+      - ../common/telemetry/.otel.env
+    environment:
+      - OTEL_ENABLED=${OTEL_ENABLED:-0}
+  celery-beat:
+    image: celery-beat
+    build:
+      context: ../../server
+      dockerfile: Dockerfile
+    env_file:
+      - .prod.env
+      - .dev.env
+      - ../common/telemetry/.otel.env
+    environment:
+      - OTEL_ENABLED=${OTEL_ENABLED:-0}
+  celery-worker:
+    image: celery-worker
+    build:
+      context: ../../server
+      dockerfile: Dockerfile
+    env_file:
+      - .prod.env
+      - .dev.env
+      - ../common/telemetry/.otel.env
+    environment:
+      - OTEL_ENABLED=${OTEL_ENABLED:-0}
+  web:
+    image: merginmaps-frontend
+    build:
+      context: ../../web-app
+      dockerfile: Dockerfile
+  maildev:
+    image: maildev/maildev
+    container_name: merginmaps-maildev
+    restart: always
+    ports:
+      - 1080:1080
+      - 1025:1025
+    networks:
+      - merginmaps

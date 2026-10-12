@@ -1,0 +1,1136 @@
+openapi: 3.0.0
+info:
+  description: Mergin API to synchronize your GIS data.
+  version: "0.6"
+  title: Mergin API
+servers:
+  - url: /v2
+tags:
+  - name: project
+    description: Mergin project
+paths:
+  /projects/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    delete:
+      tags:
+        - project
+      summary: Delete project immediately
+      operationId: delete_project_now
+      responses:
+        "204":
+          $ref: "#/components/responses/NoContent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+    patch:
+      tags:
+        - project
+      summary: Update project
+      operationId: update_project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  example: survey
+      responses:
+        "204":
+          $ref: "#/components/responses/NoContent"
+        "400":
+          description: Invalid project name
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - detail
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - InvalidProjectName
+                    example: InvalidProjectName
+                  detail:
+                    type: string
+                    example: "Entered project name is invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+    get:
+      tags:
+        - project
+      summary: Get project info
+      operationId: get_project
+      parameters:
+        - name: files_at_version
+          in: query
+          description: Include list of files at specific version
+          required: false
+          schema:
+            $ref: "#/components/schemas/VersionName"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+  /projects/{id}/scheduleDelete:
+    post:
+      tags:
+        - project
+      summary: Schedule project to delete
+      operationId: schedule_delete_project
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "204":
+          $ref: "#/components/responses/NoContent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+  # /projects/{id}/chunks:
+  #   post:
+  #     tags:
+  #       - project
+  #     summary: Upload file chunk.
+  #     operationId: upload_chunk
+  #     parameters:
+  #       - $ref: "#/components/parameters/ProjectId"
+  #     requestBody:
+  #       x-stream-upload: true
+  #       content:
+  #         application/octet-stream:
+  #           schema:
+  #             type: string
+  #             format: binary
+  #     responses:
+  #       "200":
+  #         description: Chunk upload response
+  #         content:
+  #           application/json:
+  #             schema:
+  #               $ref: "#/components/schemas/UploadChunk"
+  #       "400":
+  #         $ref: "#/components/responses/BadRequest"
+  #       "401":
+  #         $ref: "#/components/responses/Unauthorized"
+  #       "403":
+  #         $ref: "#/components/responses/Forbidden"
+  #       "404":
+  #         $ref: "#/components/responses/NotFound"
+  #       "413":
+  #         $ref: "#/components/responses/RequestTooBig"
+  #     x-openapi-router-controller: mergin.sync.public_api_v2_controller
+  /projects/{id}/collaborators:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      tags:
+        - project
+      summary: Get project collaborators
+      operationId: get_project_collaborators
+      responses:
+        "200":
+          description: Project members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectMember"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+    post:
+      tags:
+        - project
+      summary: Add project collaborator
+      operationId: add_project_collaborator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user
+                - role
+              properties:
+                user:
+                  type: string
+                  example: john.doe
+                  description: username or email
+                role:
+                  $ref: "#/components/schemas/ProjectRole"
+      responses:
+        "201":
+          description: New project member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectMember"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+  /projects/{id}/collaborators/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: user_id
+        in: path
+        description: user id
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags:
+        - project
+      summary: Update project collaborator
+      operationId: update_project_collaborator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - role
+              properties:
+                role:
+                  $ref: "#/components/schemas/ProjectRole"
+      responses:
+        "200":
+          description: Updated project member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectMember"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+    delete:
+      tags:
+        - project
+      summary: Remove project collaborator
+      operationId: remove_project_collaborator
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "204":
+          $ref: "#/components/responses/NoContent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+  /projects/{id}/raw/diff:
+    get:
+      tags:
+        - project
+      summary: Download project geopackage diff file
+      operationId: download_diff_file
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: file
+          required: true
+          in: query
+          description: File id of the diff file to download
+          schema:
+            type: string
+            example: survey.gpkg-diff-1b9fe848-d2e4-4c53-958d-3dd97e5486f6
+      responses:
+        "200":
+          description: File content (or its part)
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Requested diff file could not be downloaded as it was not created
+          # mixing content types would trigger 500 on response validation
+          # might be related to issue https://github.com/spec-first/connexion/issues/2054
+          # content:
+          #   application/json+problem:
+          #     schema:
+          #       $ref: "#/components/schemas/DiffDownloadError"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+  /projects/{id}/versions:
+    post:
+      tags:
+        - project
+      summary: Create a new project version from pushed data
+      operationId: create_project_version
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        description: Project files changes and current version head.
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - version
+                - changes
+              properties:
+                check_only:
+                  type: boolean
+                  default: false
+                  example: true
+                version:
+                  $ref: "#/components/schemas/VersionName"
+                changes:
+                  type: object
+                  required:
+                    - added
+                    - updated
+                    - removed
+                  properties:
+                    added:
+                      type: array
+                      items:
+                        $ref: "#/components/schemas/UploadFile"
+                    updated:
+                      type: array
+                      items:
+                        $ref: "#/components/schemas/UpdateFile"
+                    removed:
+                      type: array
+                      items:
+                        $ref: "#/components/schemas/File"
+      responses:
+        "201":
+          description: New project version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectDetail"
+        "204":
+          $ref: "#/components/responses/NoContent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Version already exists or another process is already running
+          content:
+            application/problem+json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ProjectVersionExists"
+                  - $ref: "#/components/schemas/AnotherUploadRunning"
+        "422":
+          description: Request could not be processed by server
+          content:
+            application/problem+json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/UploadError"
+                  - $ref: "#/components/schemas/UnsupportedFilesDetected"
+                  - $ref: "#/components/schemas/TrialExpired"
+                  - $ref: "#/components/schemas/StorageLimitHit"
+                  - $ref: "#/components/schemas/DataSyncError"
+        "423":
+          description: Project is locked for any upload
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProjectLocked"
+
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+
+  /projects/batch:
+    post:
+      tags:
+        - project
+      summary: Get multiple projects by UUIDs
+      operationId: list_batch_projects
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  description: List of project UUIDs to fetch
+                  items:
+                    $ref: "#/components/schemas/ProjectId"
+      responses:
+        "200":
+          description: Projects returned as a list of simple project objects and/or error objects.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [projects]
+                properties:
+                  projects:
+                    type: array
+                    items:
+                      oneOf:
+                        - $ref: "#/components/schemas/Project"
+                        - $ref: "#/components/schemas/BatchItemError"
+        "400":
+          description: Batch limit exceeded or one or more UUIDs were invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/CustomError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+
+  /projects/{id}/delta:
+    get:
+      tags:
+        - project
+      summary: Get project changes (delta) between two versions
+      operationId: get_project_delta
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: since
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/VersionName"
+          description: Start version (exclusive)
+        - name: to
+          in: query
+          schema:
+            $ref: "#/components/schemas/VersionName"
+          description: End version (inclusive)
+      responses:
+        "200":
+          description: Project changes between two versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectDeltaResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+  /workspaces/{workspace_id}/projects:
+    get:
+      tags:
+        - workspace
+      summary: List projects in the workspace
+      operationId: list_workspace_projects
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - name: page
+          in: query
+          description: page number
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            example: 1
+        - name: per_page
+          in: query
+          description: Number of results per page
+          required: true
+          schema:
+            type: integer
+            maximum: 50
+            example: 50
+        - name: order_params
+          in: query
+          description: Sorting fields
+          required: false
+          schema:
+            type: string
+            example: name ASC, expire DESC
+        - name: q
+          in: query
+          description: Filter by name with ilike pattern
+          required: false
+          schema:
+            type: string
+            example: my-survey
+      responses:
+        "200":
+          description: List of workspace projects that match the query limited to 50
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  page:
+                    type: integer
+                    example: 1
+                  per_page:
+                    type: integer
+                    example: 20
+                  count:
+                    type: integer
+                    example: 10
+                  projects:
+                    type: array
+                    maxItems: 50
+                    items:
+                      $ref: "#/components/schemas/Project"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+    post:
+      tags:
+        - workspace
+      summary: Create a new empty project in the workspace
+      operationId: create_project
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  example: survey
+      responses:
+        "201":
+          description: New project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          description: Invalid project name
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - detail
+                properties:
+                  code:
+                    type: string
+                    enum:
+                      - InvalidProjectName
+                    example: InvalidProjectName
+                  detail:
+                    type: string
+                    example: "Entered project name is invalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          description: New project cannot be created in the workspace
+          content:
+            application/problem+json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ProjectsLimitHit"
+                  - $ref: "#/components/schemas/TrialExpired"
+      x-openapi-router-controller: mergin.sync.public_api_v2_controller
+components:
+  responses:
+    NoContent:
+      description: No content
+    BadRequest:
+      description: Invalid request
+    Unauthorized:
+      description: Authentication information is missing or invalid
+    Forbidden:
+      description: Invalid token
+    NotFound:
+      description: Not found
+    Conflict:
+      description: Conflict
+    RequestTooBig:
+      description: Request Entity Too Large
+  parameters:
+    ProjectId:
+      name: id
+      in: path
+      description: UUID of the project
+      required: true
+      schema:
+        $ref: "#/components/schemas/ProjectId"
+    WorkspaceId:
+      name: workspace_id
+      in: path
+      description: Workspace id
+      required: true
+      schema:
+        type: integer
+  schemas:
+    ProjectId:
+      type: string
+      format: uuid
+      pattern: \b[0-9a-f]{8}\b-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-\b[0-9a-f]{12}\b
+    # Errors
+    CustomError:
+      type: object
+      properties:
+        code:
+          type: string
+        detail:
+          type: string
+      required:
+        - code
+        - detail
+    TrialExpired:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      example:
+        code: TrialExpired
+        detail: Failed to push changes. Ask the workspace owner to log in to their Mergin Maps dashboard
+    StorageLimitHit:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      type: object
+      properties:
+        current_usage:
+          type: integer
+        storage_limit:
+          type: integer
+      example:
+        code: StorageLimitHit
+        detail: You have reached a data limit (StorageLimitHit)
+        current_usage: 24865
+        storage_limit: 24865
+    ProjectsLimitHit:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      type: object
+      properties:
+        projects_quota:
+          type: integer
+      example:
+        code: ProjectsLimitHit
+        detail: Maximum number of projects is reached. Please upgrade your subscription to create new projects (ProjectsLimitHit)
+        projects_quota: 2
+    ProjectLocked:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      example:
+        code: ProjectLocked
+        detail: The project is currently locked and you cannot make changes to it (ProjectLocked)
+    ProjectVersionExists:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      type: object
+      properties:
+        client_version:
+          type: string
+        server_version:
+          type: string
+      example:
+        code: ProjectVersionExists
+        detail: Project version mismatch (ProjectVersionExists)
+    AnotherUploadRunning:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      type: object
+      properties:
+        client_version:
+          type: string
+        server_version:
+          type: string
+      example:
+        code: AnotherUploadRunning
+        detail: Another process is running (AnotherUploadRunning)
+    DataSyncError:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      type: object
+      properties:
+        failed_files:
+          type: object
+      example:
+        code: DataSyncError
+        detail: "There are either corrupted files or it is not possible to create version with provided geopackage data (DataSyncError)"
+        failed_files:
+          "survey.gpkg": "Corrupted file"
+    UploadError:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      example:
+        code: UploadError
+        detail: "Project version could not be created (UploadError)"
+    UnsupportedFilesDetected:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      type: object
+      properties:
+        unsupported_files:
+          type: array
+          items:
+            type: string
+      example:
+        code: UnsupportedFilesDetected
+        detail: "Unsupported files detected: 'notes:draft.txt', 'photos|old/tree.jpg'. Please remove the invalid characters. (UnsupportedFilesDetected)"
+        unsupported_files:
+          - "notes:draft.txt"
+          - "photos|old/tree.jpg"
+    BatchItemError:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ProjectId"
+        error:
+          type: integer
+          example: 404
+      required:
+        - id
+        - error
+    DiffDownloadError:
+      allOf:
+        - $ref: "#/components/schemas/CustomError"
+      example:
+        code: DiffDownloadError
+        detail: Required diff file could not be created (DiffDownloadError)
+    # Data
+    ProjectRole:
+      type: string
+      nullable: true
+      enum:
+        - owner
+        - writer
+        - editor
+        - reader
+      example: reader
+    WorkspaceRole:
+      type: string
+      enum:
+        - owner
+        - admin
+        - writer
+        - editor
+        - reader
+        - guest
+      example: writer
+    Role:
+      allOf:
+        - $ref: "#/components/schemas/ProjectRole"
+          nullable: false
+          description: combination of workspace role and project role
+    UploadChunk:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        valid_until:
+          type: string
+          format: date-time
+          example: "2023-10-01T12:00:00Z"
+    ProjectMember:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: john.doe
+        email:
+          type: string
+          format: email
+          example: john.doe@example.com
+        workspace_role:
+          $ref: "#/components/schemas/WorkspaceRole"
+        project_role:
+          $ref: "#/components/schemas/ProjectRole"
+        role:
+          $ref: "#/components/schemas/Role"
+    Project:
+      type: object
+      required:
+        - id
+        - name
+        - workspace
+        - role
+        - version
+        - created_at
+        - updated_at
+        - public
+        - size
+      properties:
+        id:
+          type: string
+          description: project uuid
+          example: c1ae6439-0056-42df-a06d-79cc430dd7df
+        name:
+          type: string
+          example: survey
+        workspace:
+          type: object
+          properties:
+            id:
+              type: integer
+              example: 123
+            name:
+              type: string
+              example: mergin
+        role:
+          $ref: "#/components/schemas/ProjectRole"
+        version:
+          type: string
+          description: latest project version
+          example: v2
+        created_at:
+          type: string
+          format: date-time
+          description: project creation timestamp
+          example: 2025-10-24T08:27:56Z
+        updated_at:
+          type: string
+          format: date-time
+          description: last project update timestamp
+          example: 2025-10-24T08:28:00.279699Z
+        public:
+          type: boolean
+          description: whether the project is public
+          example: false
+        size:
+          type: integer
+          description: project size in bytes for this version
+          example: 17092380
+        files:
+          type: array
+          description: List of files in the project
+          items:
+            allOf:
+              - $ref: "#/components/schemas/File"
+              - type: object
+                properties:
+                  mtime:
+                    type: string
+                    format: date-time
+                    description: File modification timestamp
+                    example: 2024-11-19T13:50:00Z
+    ProjectDetail:
+      allOf:
+        - $ref: "#/components/schemas/Project"
+        - type: object
+          properties:
+            files:
+              type: array
+              description: List of files in the project
+              items:
+                allOf:
+                  - $ref: "#/components/schemas/File"
+                  - type: object
+                    properties:
+                      mtime:
+                        type: string
+                        format: date-time
+                        description: File modification timestamp
+                        example: 2024-11-19T13:50:00Z
+    File:
+      type: object
+      description: Project file metadata
+      required:
+        - path
+        - size
+      properties:
+        path:
+          type: string
+          example: media/favicon.ico
+        size:
+          type: integer
+          format: int64
+          example: 1024
+        checksum:
+          description: sha1 hash of file
+          type: string
+          example: 9adb76bf81a34880209040ffe5ee262a090b62ab
+    UploadFile:
+      description: Metadata of uploaded file with chunks it is composed of
+      allOf:
+        - $ref: "#/components/schemas/File"
+        - type: object
+          properties:
+            chunks:
+              type: array
+              items:
+                type: string
+                example: d17a60eb-6581-431c-adfc-3451231455bb
+    UpdateFile:
+      description: Metadata of updated file with optional metadata about uploaded file diff
+      allOf:
+        - $ref: "#/components/schemas/UploadFile"
+        - type: object
+          properties:
+            diff:
+              nullable: true
+              allOf:
+                - $ref: "#/components/schemas/File"
+    MerginTag:
+      type: string
+      enum:
+        - valid_qgis
+        - mappin_use
+        - input_use
+      example: valid_qgis
+    Access:
+      type: object
+      properties:
+        ownersnames:
+          type: array
+          nullable: false
+          items:
+            type: string
+          example: [john.doe]
+        writersnames:
+          type: array
+          nullable: false
+          items:
+            type: string
+          example: [john.doe]
+        editorsnames:
+          type: array
+          nullable: false
+          items:
+            type: string
+          example: [john.doe]
+        readersnames:
+          type: array
+          nullable: false
+          items:
+            type: string
+          example: [john.doe]
+        public:
+          type: boolean
+          example: true
+        owners:
+          type: array
+          nullable: false
+          items:
+            type: integer
+          example: [1]
+        writers:
+          type: array
+          nullable: false
+          items:
+            type: integer
+          example: [1]
+        editors:
+          type: array
+          nullable: false
+          items:
+            type: integer
+          example: [1]
+        readers:
+          type: array
+          nullable: false
+          items:
+            type: integer
+          example: [1]
+    FileInfo:
+      type: object
+      required:
+        - path
+        - size
+        - checksum
+      properties:
+        path:
+          type: string
+          example: media/favicon.ico
+        checksum:
+          description: sha1 hash
+          type: string
+          example: 9adb76bf81a34880209040ffe5ee262a090b62ab
+        size:
+          type: integer
+          format: int64
+          example: 1024
+        mtime:
+          deprecated: true
+          type: string
+          format: date-time
+          example: 2018-11-30T08:47:58.636074Z
+        diff:
+          type: object
+          nullable: true
+          required:
+            - path
+            - checksum
+          properties:
+            path:
+              type: string
+              description: unique diff filename
+              example: survey.gpkg-diff-15eqn2q
+            checksum:
+              type: string
+              example: 45dfdfbf81a34asdf209040ffe5fasdf2a090bfa
+            size:
+              type: integer
+              example: 512
+        history:
+          type: object
+          description: map with version names as keys and file info as values
+          additionalProperties:
+            type: object
+            required:
+              - path
+              - size
+              - checksum
+              - change
+            properties:
+              path:
+                type: string
+                example: media/favicon.ico
+              checksum:
+                description: sha1 hash
+                type: string
+                example: 9adb76bf81a34880209040ffe5ee262a090b62ab
+              size:
+                type: integer
+                format: int64
+                example: 1024
+              change:
+                type: string
+                example: added
+                enum:
+                  - added
+                  - updated
+                  - removed
+              expiration:
+                nullable: true
+                type: string
+                format: date-time
+                example: 2019-02-26T08:47:58.636074Z
+    ProjectChangeType:
+      type: string
+      enum: [create, update, delete, update_diff]
+      example: update
+    ProjectDeltaChange:
+      type: object
+      required:
+        - path
+        - size
+        - checksum
+        - version
+        - change
+      properties:
+        path:
+          type: string
+          example: survey.gpkg
+        size:
+          type: integer
+          example: 1024
+        checksum:
+          type: string
+          example: 9adb76bf81a34880209040ffe5ee262a090b62ab
+        version:
+          $ref: "#/components/schemas/VersionName"
+        change:
+          $ref: "#/components/schemas/ProjectChangeType"
+        diffs:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                example: survey.gpkg-diff-1
+    ProjectDeltaResponse:
+      type: object
+      required:
+        - items
+        - to_version
+      properties:
+        to_version:
+          $ref: "#/components/schemas/VersionName"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectDeltaChange"
+    VersionName:
+      type: string
+      pattern: '^$|^v\d+$'
+      example: v2

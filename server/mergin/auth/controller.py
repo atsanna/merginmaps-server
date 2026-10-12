@@ -1,0 +1,766 @@
+# Copyright (C) Lutra Consulting Limited
+#
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
+
+import os
+from connexion import NoContent
+from sqlalchemy import func, desc, asc
+from sqlalchemy.sql.operators import is_
+from flask import request, current_app, jsonify, abort, render_template, session
+from flask_login import login_user, logout_user, current_user
+from flask_wtf.csrf import generate_csrf
+
+from .app import (
+    auth_required,
+    authenticate,
+    send_confirmation_email,
+    send_password_reset_email,
+    confirm_token,
+    generate_confirmation_token,
+    confirm_unlock_token,
+    user_created,
+    user_account_closed,
+    edit_profile_enabled,
+    generate_bearer_token,
+    CANNOT_EDIT_PROFILE_MSG,
+)
+from .models import User, LoginHistory
+from .schemas import UserSchema, UserSearchSchema, UserProfileSchema, UserInfoSchema
+from .forms import (
+    LoginForm,
+    UserPasswordForm,
+    ResetPasswordForm,
+    UserRegistrationForm,
+    UserForm,
+    UserProfileDataForm,
+    UserChangePasswordForm,
+    ApiLoginForm,
+)
+from ..app import db
+from ..audit import emit
+from ..audit.listeners import actor_context, request_context
+from .events import AuthEventType
+from ..sync.models import Project
+from ..sync.utils import files_size
+
+
+EMAIL_CONFIRMATION_EXPIRATION = 12 * 3600
+ACCOUNT_UNLOCK_TOKEN_EXPIRATION = 24 * 3600
+
+
+# public endpoints
+def user_profile(user, return_all=True):
+    """Return user profile in json format
+
+    Will return just some public profile if not return_all
+
+    :param user: User data that will be returned
+    :type user: User
+
+    :return: extended user profile with mergin service info
+    :rtype: dict
+    """
+    data = UserProfileSchema().dump(user.profile)
+    data["username"] = user.username
+    data["id"] = user.id
+
+    if return_all:
+        data.update(
+            {
+                "email": user.email,
+                "storage_limit": data["storage"],  # duplicate - we should remove it
+                "receive_notifications": user.receive_notifications,
+                "verified_email": user.verified_email,
+                "tier": "free",
+                "registration_date": user.registration_date,
+            }
+        )
+    return data
+
+
+@auth_required
+def get_user_public(username=None):  # noqa: E501
+    """User profile info of logged user
+    DEPRECATED endpoint only for backward compatibility.
+    Response is the best guess user info in context of workspaces.
+
+     # noqa: E501
+
+    :param username: Username (ignored)
+    :type username: str
+
+    :rtype: UserDetail
+    """
+    user_workspace = current_app.ws_handler.get_by_name(current_user.username)
+    all_workspaces = current_app.ws_handler.list_user_workspaces(current_user.username)
+    user_info = {
+        "username": current_user.username,
+        "email": current_user.email,
+        "disk_usage": user_workspace.disk_usage() if user_workspace else 0,
+        "storage": user_workspace.storage if user_workspace else 104857600,
+        "storage_limit": user_workspace.storage if user_workspace else 104857600,
+        "organisations": {
+            ws.name: ws.get_user_role(current_user).value for ws in all_workspaces
+        },
+    }
+    return user_info, 200
+
+
+def _extract_first_error(errors):
+    """
+    For now, if the response is plain string,
+    InputApp displays it in the nice
+    notification window. Extract first error
+    and just send that one to client
+    """
+    for key, value in errors.items():
+        val = str(value[0])
+        if key.lower() in val.lower():
+            # e.g. Passwords must contain special character.
+            # in this case we do not need to add key "password"
+            # since it is obvious from where it comes from
+            return val
+        elif val.startswith("Field"):
+            # e.g. Field must be longer than 4 characters
+            # In this case the generic validator use Field
+            # replace with the key (e.g. "Username")
+            return val.replace("Field", key.capitalize())
+        else:
+            # show both key and value
+            return val + "(" + key + ")"
+
+    return "Unknown error in input fields"
+
+
+def login_public():  # noqa: E501
+    """Login user.
+
+    Returns session token, expiration time and user profile info # noqa: E501
+
+    :rtype: LoginResponse
+    """
+    form = ApiLoginForm()
+    if form.validate():
+        user = authenticate(form.login.data, form.password.data)
+        if user and user.active:
+            token, expire = generate_bearer_token(
+                current_app, user, current_app.config["BEARER_TOKEN_EXPIRATION"]
+            )
+
+            data = user_profile(user)
+            data["session"] = {"token": token, "expire": expire}
+            LoginHistory.add_record(user.id, request)
+            emit(
+                AuthEventType.USER_LOGIN_SUCCEEDED,
+                actor_id=user.id,
+                actor_email=user.email,
+                **request_context(),
+                target_user_id=user.id,
+                login_method="password",
+                token_expires_at=expire.isoformat(),
+            )
+            return data
+        else:
+            audit_user = user or User.get_by_login(form.login.data)
+            emit(
+                AuthEventType.USER_LOGIN_FAILED,
+                **request_context(),
+                target_user_id=audit_user.id if audit_user else None,
+                login=form.login.data,
+                reason="account_inactive" if user else "invalid_credentials",
+                login_method="password",
+            )
+            abort(401, "Invalid username or password")
+    abort(400, _extract_first_error(form.errors))
+
+
+@auth_required
+def close_user_account():
+    """Close current user account
+    Closing user account effectively means to inactivate user (will be removed by cron job) and remove explicitly
+    shared projects as well clean references to created projects.
+    """
+    current_user.inactivate()
+    emit(
+        AuthEventType.USER_MARKED_FOR_DELETION,
+        **actor_context(),
+        target_user_id=current_user.id,
+        target_email=current_user.email,
+        scheduled_for_deletion_at=(
+            current_user.removal_at.isoformat() if current_user.removal_at else None
+        ),
+    )
+    # emit signal to be caught elsewhere
+    user_account_closed.send(current_user)
+    return NoContent, 204
+
+
+# private endpoints
+@auth_required
+def search_users():  # pylint: disable=W0613,W0612
+    """Find active users in workspace by ids, usernames or with ilike pattern using attribute (username/email)."""
+    ids = request.args.get("id")
+    names = request.args.get("names")
+    like = request.args.get("like")
+    workspace = current_app.ws_handler.get_by_name(request.args.get("namespace"))
+    if not workspace:
+        abort(404, "Workspace not found")
+
+    if not workspace.user_is_member(current_user):
+        abort(403, "You do not have permissions to search within workspace")
+
+    if ids:
+        ids = request.args.get("id")
+        try:
+            ids = map(int, ids.split(","))
+            users_found = (
+                User.query.filter(User.id.in_(ids), User.active.is_(True))
+                .order_by(User.username)
+                .limit(10)
+                .all()
+            )
+        except (ValueError, AttributeError):
+            users_found = []
+    elif names:
+        names = names.split(",")
+        users_found = (
+            User.query.filter(User.username.in_(names), User.active.is_(True))
+            .order_by(User.username)
+            .limit(10)
+            .all()
+        )
+    elif like:
+        users_found = User.search(like, limit=10, only_active=True)
+    else:
+        return [], 200
+
+    users = [u for u in users_found if workspace.user_is_member(u)]
+    return jsonify(UserSearchSchema(many=True).dump(users)), 200
+
+
+def login():  # pylint: disable=W0613,W0612
+    form = LoginForm()
+    if form.validate():
+        user = authenticate(form.login.data, form.password.data)
+        if user and user.active:
+            login_user(user)
+            if not os.path.isfile(current_app.config["MAINTENANCE_FILE"]):
+                LoginHistory.add_record(user.id, request)
+            emit(
+                AuthEventType.USER_LOGIN_SUCCEEDED,
+                actor_id=user.id,
+                actor_email=user.email,
+                **request_context(),
+                target_user_id=user.id,
+                login_method="password",
+            )
+            return "", 200
+        else:
+            audit_user = user or User.get_by_login(form.login.data)
+            emit(
+                AuthEventType.USER_LOGIN_FAILED,
+                **request_context(),
+                target_user_id=audit_user.id if audit_user else None,
+                login=form.login.data,
+                reason="account_inactive" if user else "invalid_credentials",
+                login_method="password",
+            )
+            abort(401, "Invalid username or password")
+    return jsonify(form.errors), 401
+
+
+def admin_login():  # pylint: disable=W0613,W0612
+    """Login into admin interface"""
+    form = LoginForm()
+    if not form.validate():
+        return jsonify(form.errors), 400
+
+    user = authenticate(form.login.data, form.password.data)
+    if user:
+        if user.active and user.is_admin:
+            login_user(user)
+            emit(
+                AuthEventType.USER_LOGIN_SUCCEEDED,
+                actor_id=user.id,
+                actor_email=user.email,
+                **request_context(),
+                target_user_id=user.id,
+                login_method="password",
+            )
+            LoginHistory.add_record(user.id, request)
+            return "", 200
+        else:
+            emit(
+                AuthEventType.USER_LOGIN_FAILED,
+                **request_context(),
+                target_user_id=user.id,
+                login=form.login.data,
+                reason="insufficient_permissions",
+                login_method="password",
+            )
+            abort(403, "You do not have permissions")
+    else:
+        audit_user = User.get_by_login(form.login.data)
+        emit(
+            AuthEventType.USER_LOGIN_FAILED,
+            **request_context(),
+            target_user_id=audit_user.id if audit_user else None,
+            login=form.login.data,
+            reason="invalid_credentials",
+            login_method="password",
+        )
+        abort(401, "Invalid username or password")
+
+
+@auth_required
+def logout():  # pylint: disable=W0613,W0612
+    logout_user()
+    return "", 200
+
+
+@auth_required
+@edit_profile_enabled
+def change_password():  # pylint: disable=W0613,W0612
+    form = UserChangePasswordForm()
+    if form.validate_on_submit():
+        if not current_user.check_password(form.old_password.data):
+            form.old_password.errors.append("The old password is incorrect")
+            return jsonify(form.errors), 400
+        current_user.assign_password(form.password.data)
+        current_user.revoke_sessions()
+        db.session.add(current_user)
+        db.session.commit()
+        # keep the session that made the change logged in (bearer token callers need to log in again)
+        # "_user_id" is flask-login session key, present only for cookie-based authentication
+        if "_user_id" in session:
+            login_user(current_user._get_current_object())
+        emit(
+            AuthEventType.USER_PASSWORD_CHANGED,
+            **actor_context(),
+            target_user_id=current_user.id,
+            target_email=current_user.email,
+        )
+        return "", 200
+    return jsonify(form.errors), 400
+
+
+@auth_required
+@edit_profile_enabled
+def resend_confirm_email():  # pylint: disable=W0613,W0612
+    send_confirmation_email(
+        current_app,
+        current_user,
+        "confirm-email",
+        "email/email_confirmation.html",
+        "Email confirmation",
+    )
+    return "", 200
+
+
+def password_reset():  # pylint: disable=W0613,W0612
+    form = ResetPasswordForm()
+    if not form.validate():
+        return jsonify(form.errors), 400
+
+    # respond the same regardless of account existence/state (enumeration)
+    user = User.query.filter(
+        func.lower(User.email) == func.lower(form.email.data.strip())
+    ).one_or_none()
+    emit(
+        AuthEventType.USER_PASSWORD_RESET_REQUESTED,
+        **request_context(),
+        target_user_id=user.id if user else None,
+        target_email=form.email.data.strip(),
+    )
+    if user and user.active and user.can_edit_profile:
+        send_password_reset_email(current_app, user)
+    return "", 200
+
+
+def confirm_new_password(token):  # pylint: disable=W0613,W0612
+    payload = confirm_token(
+        token,
+        salt=current_app.config["SECURITY_PASSWORD_SALT"],
+        expiration=current_app.config["PASSWORD_RESET_TOKEN_EXPIRATION"],
+    )
+    # tokens issued before nonces were introduced carried only the email
+    if not isinstance(payload, dict):
+        emit(
+            AuthEventType.USER_PASSWORD_RESET_FAILED,
+            **request_context(),
+            target_user_id=None,
+            target_email=None,
+            reason="invalid_token",
+        )
+        abort(400, "Invalid token")
+
+    email = payload["email"]
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        emit(
+            AuthEventType.USER_PASSWORD_RESET_FAILED,
+            **request_context(),
+            target_user_id=None,
+            target_email=email,
+            reason="user_not_found",
+        )
+        abort(404)
+    # token was already used, superseded by a newer one or revoked by a password change
+    if not user.password_reset_nonce or user.password_reset_nonce != payload["nonce"]:
+        emit(
+            AuthEventType.USER_PASSWORD_RESET_FAILED,
+            **request_context(),
+            target_user_id=user.id,
+            target_email=user.email,
+            reason="token_revoked",
+        )
+        abort(400, "Invalid token")
+    if not user.active:
+        emit(
+            AuthEventType.USER_PASSWORD_RESET_FAILED,
+            **request_context(),
+            target_user_id=user.id,
+            target_email=user.email,
+            reason="account_inactive",
+        )
+        abort(400, "Account is not active")
+    if not user.can_edit_profile:
+        emit(
+            AuthEventType.USER_PASSWORD_RESET_FAILED,
+            **request_context(),
+            target_user_id=user.id,
+            target_email=user.email,
+            reason="profile_edit_disabled",
+        )
+        abort(403, CANNOT_EDIT_PROFILE_MSG)
+
+    form = UserPasswordForm.from_json(request.json)
+    if form.validate():
+        user.assign_password(form.password.data)
+        user.revoke_sessions()
+        user.reset_lockout()
+        db.session.add(user)
+        db.session.commit()
+        emit(
+            AuthEventType.USER_PASSWORD_RESET_COMPLETED,
+            **request_context(),
+            target_user_id=user.id,
+            target_email=user.email,
+        )
+        return "", 200
+    return jsonify(form.errors), 400
+
+
+def confirm_email(token):  # pylint: disable=W0613,W0612
+    email = confirm_token(
+        token,
+        expiration=EMAIL_CONFIRMATION_EXPIRATION,
+        salt=current_app.config["SECURITY_EMAIL_SALT"],
+    )
+    if not email:
+        abort(400, "Invalid token")
+
+    user = User.query.filter_by(email=email).first_or_404()
+    if not user.can_edit_profile:
+        abort(403, CANNOT_EDIT_PROFILE_MSG)
+    if user.verified_email:
+        return "", 200
+
+    if not user.check_password(""):
+        user.verified_email = True
+        db.session.add(user)
+        db.session.commit()
+
+    return "", 200
+
+
+def unlock_account(token: str):  # pylint: disable=W0613,W0612
+    payload = confirm_unlock_token(token, expiration=ACCOUNT_UNLOCK_TOKEN_EXPIRATION)
+    if not payload:
+        abort(400, "Invalid or expired link")
+
+    user = User.query.filter_by(email=payload["email"]).first_or_404()
+    stale = (
+        not user.is_locked_out()
+        or user.locked_until.replace(microsecond=0).isoformat()
+        != payload["locked_until"]
+    )
+    if stale:
+        abort(400, "This unlock link is no longer valid")
+
+    user.reset_lockout()
+    db.session.commit()
+    emit(
+        AuthEventType.USER_UNLOCKED,
+        **request_context(),
+        target_user_id=user.id,
+        target_email=user.email,
+    )
+    return "", 200
+
+
+@auth_required
+@edit_profile_enabled
+def update_user_profile():  # pylint: disable=W0613,W0612
+    form = UserProfileDataForm.from_json(request.json)
+    email_changed = current_user.email != form.email.data.strip()
+    if not form.validate_on_submit():
+        return jsonify(form.errors), 400
+    if email_changed:
+        user = User.query.filter(
+            func.lower(User.email) == func.lower(form.email.data.strip())
+        ).first()
+        if user:
+            form.email.errors.append("Email already exists")
+            return jsonify(form.errors), 400
+        current_user.verified_email = False
+
+    form.update_obj(current_user)
+    db.session.add(current_user)
+    db.session.commit()
+    if email_changed:
+        resend_confirm_email()
+
+    return "", 200
+
+
+@auth_required
+def refresh_csrf_token():
+    """
+    Generate new csrf token, used in case that client ask for new one from reason that old one is expired
+    :return: string token
+    """
+    return jsonify({"csrf": generate_csrf()})
+
+
+# admin endpoints
+@auth_required(permissions=["admin"])
+def register_user():  # pylint: disable=W0613,W0612
+    """Create new user and send information email"""
+    from ..celery import send_email_async
+
+    form = UserRegistrationForm()
+    form.username.data = User.generate_username(form.email.data)
+    if form.is_submitted() and form.validate():
+        db.session.info["audit_user_creation_source"] = "admin"
+        user = User.create(form.username.data, form.email.data, form.password.data)
+        user_created.send(user, source="admin")
+        token = generate_confirmation_token(
+            current_app, user.email, current_app.config["SECURITY_EMAIL_SALT"]
+        )
+        confirm_url = f"confirm-email/{token}"
+        html = render_template(
+            "email/user_created.html",
+            confirm_url=confirm_url,
+            user=user,
+            password=form.password.data,
+        )
+        email_data = {
+            "subject": "Invitation to Mergin Maps",
+            "html": html,
+            "recipients": [user.email],
+            "sender": current_app.config["MAIL_DEFAULT_SENDER"],
+        }
+        send_email_async.delay(**email_data)
+        return jsonify(UserSchema().dump(user)), 201
+
+    return jsonify(form.errors), 400
+
+
+@auth_required(permissions=["admin"])
+def get_user(username):
+    user = User.query.filter(User.username == username).first_or_404()
+    if not user.last_signed_in:
+        last_signed_in = LoginHistory.get_users_last_signed_in([user.id])
+        user.last_signed_in = last_signed_in.get(user.id)
+    data = UserSchema().dump(user)
+    return data, 200
+
+
+@auth_required(permissions=["admin"])
+def update_user(username):  # pylint: disable=W0613,W0612
+    form = UserForm.from_json(request.json)
+    if not form.validate_on_submit():
+        return jsonify(form.errors), 400
+    if request.json.get("is_admin") is not None and not current_app.config.get(
+        "ENABLE_SUPERADMIN_ASSIGNMENT"
+    ):
+        abort(400, "Unable to assign super admin role")
+
+    user = User.query.filter_by(username=username).first_or_404("User not found")
+    old_active = user.active
+    form.update_obj(user)
+    user.inactive_since = None
+    db.session.add(user)
+    db.session.commit()
+
+    if old_active and not user.active:
+        emit(
+            AuthEventType.USER_DEACTIVATED,
+            **actor_context(),
+            target_user_id=user.id,
+            target_email=user.email,
+        )
+    elif not old_active and user.active:
+        emit(
+            AuthEventType.USER_RESTORED,
+            **actor_context(),
+            target_user_id=user.id,
+            target_email=user.email,
+        )
+
+    return jsonify(UserSchema().dump(user))
+
+
+@auth_required(permissions=["admin"])
+def delete_user(username):  # pylint: disable=W0613,W0612
+    user = User.query.filter_by(username=username).first_or_404("User not found")
+    user.inactivate()
+    emit(
+        AuthEventType.USER_MARKED_FOR_DELETION,
+        **actor_context(),
+        target_user_id=user.id,
+        target_email=user.email,
+        scheduled_for_deletion_at=(
+            user.removal_at.isoformat() if user.removal_at else None
+        ),
+    )
+    user_account_closed.send(user)
+    emit(
+        AuthEventType.USER_DELETED,
+        **actor_context(),
+        target_user_id=user.id,
+        target_email=user.email,
+    )
+    user.anonymize()
+    return "", 204
+
+
+@auth_required(permissions=["admin"])
+def get_paginated_users(
+    page, per_page, order_by=None, descending=False, like=None
+):  # noqa: E501
+    """List mergin users
+
+    Returns paginated list of users, optionally filtered by username. # noqa: E501
+
+    :param page: page number
+    :type page: int
+    :param per_page: Number of results per page
+    :type per_page: int
+    :param order_by: Order by field
+    :type order_by: str
+    :param descending: Order of sorting
+    :type descending: bool
+    :param like: Filter users with usernames or emails with ilike pattern
+    :type like: str
+
+    :rtype: Dict[str: List[User], str: Integer]
+    """
+    users = User.query.filter(
+        is_(User.username.ilike("deleted_%"), False) | is_(User.active, True)
+    )
+
+    if like:
+        users = users.filter(
+            User.username.ilike(f"%{like}%")
+            | User.email.ilike(f"%{like}%")
+            | User.first_name.ilike(f"%{like}%")
+            | User.last_name.ilike(f"%{like}%")
+        )
+
+    if descending and order_by:
+        users = users.order_by(desc(User.__table__.c[order_by]))
+    elif not descending and order_by:
+        users = users.order_by(asc(User.__table__.c[order_by]))
+    else:
+        users = users.order_by(asc(User.id))
+
+    paginate = users.paginate(page=page, per_page=per_page)
+    result = paginate.items
+    total = paginate.total
+
+    result_users = UserSchema(many=True).dump(result)
+
+    data = {"items": result_users, "count": total}
+    return data, 200
+
+
+@auth_required
+def get_user_info():
+    user_info = UserInfoSchema().dump(current_user)
+    workspaces = current_app.ws_handler.list_user_workspaces(current_user.username)
+    user_info["workspaces"] = [
+        {"id": ws.id, "name": ws.name, "role": ws.get_user_role(current_user).value}
+        for ws in workspaces
+    ]
+    preferred_workspace = current_app.ws_handler.get_preferred(current_user)
+    user_info["preferred_workspace"] = (
+        preferred_workspace.id if preferred_workspace else None
+    )
+    invitations = current_app.ws_handler.list_user_invitations(current_user)
+    user_info["invitations"] = [
+        {"uuid": inv.uuid, "workspace": inv.workspace.name, "role": inv.role}
+        for inv in invitations
+    ]
+    return user_info, 200
+
+
+@auth_required
+def create_user():
+    """Create new user"""
+    workspace = current_app.ws_handler.get(request.json.get("workspace_id"))
+    if not (workspace and workspace.can_add_users(current_user)):
+        abort(403)
+
+    username = request.json.get(
+        "username", User.generate_username(request.json["email"])
+    )
+
+    # in public endpoint we want to disable form csrf - for browser clients endpoint is protected anyway
+    form = UserRegistrationForm(meta={"csrf": False})
+    form.confirm.data = form.password.data
+    form.username.data = username
+    if not form.validate():
+        return jsonify(form.errors), 400
+
+    db.session.info["audit_user_creation_source"] = "api"
+    user = User.create(
+        form.username.data,
+        form.email.data,
+        form.password.data,
+        request.json.get("notify_user", False),
+    )
+    user_created.send(
+        user,
+        source="api",
+        workspace_id=request.json["workspace_id"],
+        workspace_role=request.json["role"],
+    )
+
+    if user.receive_notifications:
+        send_confirmation_email(
+            current_app,
+            user,
+            "confirm-email",
+            "email/user_created.html",
+            "Invitation to Mergin Maps",
+            password=form.password.data,
+        )
+
+    return jsonify(UserInfoSchema().dump(user)), 201
+
+
+@auth_required(permissions=["admin"])
+def get_server_usage():
+    data = {
+        "active_monthly_contributors": current_app.ws_handler.monthly_contributors_count(),
+        "projects": Project.query.filter(Project.removed_at.is_(None)).count(),
+        "storage": files_size(),
+        "users": User.query.filter(
+            is_(User.username.ilike("deleted_%"), False),
+        ).count(),
+        "workspaces": current_app.ws_handler.workspace_count(),
+        "editors": current_app.ws_handler.server_editors_count(),
+    }
+    return data, 200

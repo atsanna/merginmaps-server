@@ -1,0 +1,94 @@
+# Copyright (C) Lutra Consulting Limited
+#
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
+
+import os
+from tempfile import gettempdir
+from decouple import config, Csv
+
+config_dir = os.path.abspath(os.path.dirname(__file__))
+
+
+class Configuration(object):
+    LOCAL_PROJECTS = config(
+        "LOCAL_PROJECTS",
+        default=os.path.join(config_dir, os.pardir, os.pardir, os.pardir, "projects"),
+    )
+    PROJECTS_ARCHIVES_DIR = config(
+        "PROJECTS_ARCHIVES_DIR",
+        default=os.path.join(LOCAL_PROJECTS, "projects_archives"),
+    )
+    PROJECTS_ARCHIVES_EXPIRATION = config(
+        "PROJECTS_ARCHIVES_EXPIRATION", cast=int, default=7
+    )
+    # locking file when backups are created
+    MAINTENANCE_FILE = config(
+        "MAINTENANCE_FILE", default=os.path.join(LOCAL_PROJECTS, "MAINTENANCE")
+    )
+    LOCKFILE_EXPIRATION = config(
+        "LOCKFILE_EXPIRATION", default=300, cast=int
+    )  # in seconds
+    MAX_CHUNK_SIZE = config(
+        "MAX_CHUNK_SIZE", default=10 * 1024 * 1024, cast=int
+    )  # in bytes
+    # use nginx (in front of gunicorn) to serve files (https://www.nginx.com/resources/wiki/start/topics/examples/x-accel/)
+    USE_X_ACCEL = config("USE_X_ACCEL", default=False, cast=bool)
+    PROJECTS_ARCHIVES_X_ACCEL_BUFFERING = config(
+        "PROJECTS_ARCHIVES_X_ACCEL_BUFFERING", default="no"
+    )  # no buffering for large files
+    # for clean up of old files where diffs were applied, in seconds
+    FILE_EXPIRATION = config("FILE_EXPIRATION", default=48 * 3600, cast=int)
+    BLACKLIST = config(
+        "BLACKLIST", default=".mergin/, .DS_Store, .directory", cast=Csv()
+    )
+    # max total files size for archive download
+    MAX_DOWNLOAD_ARCHIVE_SIZE = config(
+        "MAX_DOWNLOAD_ARCHIVE_SIZE", default=1024 * 1024 * 1024 * 10, cast=int
+    )  # 10 GB
+    PROJECT_ACCESS_REQUEST = config(
+        "PROJECT_ACCESS_REQUEST", default=7 * 24 * 3600, cast=int
+    )
+    TEMP_EXPIRATION = config(
+        "TEMP_EXPIRATION", default=7, cast=int
+    )  # time in days after files are permanently deleted
+    # lifetime of deleted project, expired project are removed permanently without restore possibility, in days
+    DELETED_PROJECT_EXPIRATION = config(
+        "DELETED_PROJECT_EXPIRATION", default=7, cast=int
+    )
+    # trash dir for temp files being cleaned regularly
+    TEMP_DIR = config("TEMP_DIR", default=gettempdir())
+    # working directory for geodiff actions - should be a fast local storage
+    GEODIFF_WORKING_DIR = config(
+        "GEODIFF_WORKING_DIR",
+        default=os.path.join(LOCAL_PROJECTS, "geodiff_tmp"),
+    )
+    # in seconds, older unfinished zips are moved to temp
+    PARTIAL_ZIP_EXPIRATION = config("PARTIAL_ZIP_EXPIRATION", default=600, cast=int)
+    # whether new push is allowed
+    V2_PUSH_ENABLED = config("V2_PUSH_ENABLED", default=True, cast=bool)
+    # directory for file chunks
+    UPLOAD_CHUNKS_DIR = config(
+        "UPLOAD_CHUNKS_DIR",
+        default=os.path.join(LOCAL_PROJECTS, "chunks"),
+    )
+    # time in seconds after chunks are permanently deleted (1 day)
+    UPLOAD_CHUNKS_EXPIRATION = config(
+        "UPLOAD_CHUNKS_EXPIRATION", default=86400, cast=int
+    )
+    # whether client can pull using v2 apis
+    V2_PULL_ENABLED = config("V2_PULL_ENABLED", default=True, cast=bool)
+    EXCLUDED_CLONE_FILENAMES = config(
+        "EXCLUDED_CLONE_FILENAMES", default="qgis_cfg.xml", cast=Csv()
+    )
+    # files that should be ignored during extension and MIME type checks
+    UPLOAD_FILES_WHITELIST = config("UPLOAD_FILES_WHITELIST", default="", cast=Csv())
+    # extra extensions to permit beyond the default block-list
+    UPLOAD_EXTENSIONS_WHITELIST = config(
+        "UPLOAD_EXTENSIONS_WHITELIST", default="", cast=Csv()
+    )
+    # max batch size for fetch projects in batch endpoint
+    MAX_BATCH_SIZE = config("MAX_BATCH_SIZE", default=100, cast=int)
+    # max size (in bytes) of an uploaded full .gpkg file for which server will try to construct a diff
+    MAX_DIFFABLE_FORCE_UPDATE_SIZE = config(
+        "MAX_DIFFABLE_FORCE_UPDATE_SIZE", default=512 * 1024 * 1024, cast=int
+    )

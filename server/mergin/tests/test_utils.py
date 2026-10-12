@@ -1,0 +1,449 @@
+# Copyright (C) Lutra Consulting Limited
+#
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
+
+import base64
+from datetime import datetime
+import json
+import pytest
+from flask import url_for, current_app
+from marshmallow import Schema, fields
+from sqlalchemy import desc
+import os
+from unittest.mock import patch
+from pathvalidate import sanitize_filename
+from pygeodiff import GeoDiff
+from pathlib import PureWindowsPath
+
+from ..utils import save_diagnostic_log_file, get_schema_fields_map
+
+from ..sync.utils import (
+    is_reserved_word,
+    has_valid_characters,
+    has_valid_first_character,
+    check_filename,
+    is_supported_extension,
+    is_supported_type,
+    get_mimetype,
+    is_valid_path,
+    get_x_accel_uri,
+    Checkpoint,
+    wkb2wkt,
+    has_trailing_space,
+    check_skip_validation,
+)
+from ..auth.models import LoginHistory, User
+from . import json_headers
+from .utils import login
+
+
+@pytest.fixture(scope="function")
+def client(app):
+    client = app.test_client()
+    return client
+
+
+def test_maintenance_mode(client):
+    main_file = current_app.config["MAINTENANCE_FILE"]
+    try:
+        # create maintenance file
+        file = open(main_file, "w+")
+        login(client, "mergin", "ilovemergin")
+
+        user = User.query.filter_by(username="mergin").first()
+        login_history = (
+            LoginHistory.query.filter_by(user_id=user.id)
+            .order_by(desc(LoginHistory.timestamp))
+            .first()
+        )
+        # no login history was created because server is in maintenance mode
+        assert not login_history
+
+        resp = client.post(
+            "/v1/project/{}".format("mergin"),
+            data=json.dumps({"name": " foo "}),
+            headers=json_headers,
+        )
+        assert resp.status_code == 503
+
+        resp = client.get(url_for("/.mergin_auth_controller_logout"))
+        assert resp.status_code == 200
+
+        # delete maintenance file
+        os.remove(main_file)
+
+        login(client, "mergin", "ilovemergin")
+        login_history = (
+            LoginHistory.query.filter_by(user_id=user.id)
+            .order_by(desc(LoginHistory.timestamp))
+            .first()
+        )
+        assert login_history
+
+        resp = client.post(
+            "/v1/project/{}".format("mergin"),
+            data=json.dumps({"name": " foo "}),
+            headers=json_headers,
+        )
+        assert resp.status_code == 200
+    finally:
+        # delete maintenance file if tests failed
+        if os.path.isfile(main_file):
+            os.remove(main_file)
+
+
+def test_parse_gpkg():
+    geodiff = GeoDiff()
+    # Point
+    gpkg_wkb = base64.b64decode(
+        "R1AAAeYQAAABAQAAAID8bic0LLE/RlTr7Iuo1j8=", validate=True
+    )
+    wkb = geodiff.create_wkb_from_gpkg_header(gpkg_wkb)
+    wkt = wkb2wkt(wkb)
+    assert "POINT" in wkt
+
+    # Linestring
+    gpkg_wkb = base64.b64decode(
+        "R1AAA+YQAABA0VaD5wjkv+R3O6FhidC/hn8DkdjL0z8Iwc3FqhvlPwECAAAABAAAAGhDvPBvINK/CMHNxaob5T9I139WMEjZv+DthIYlQuA/5Hc7oWGJ0L+GfwOR2MvTP0DRVoPnCOS/zB9sPJo/2D8=",
+        validate=True,
+    )
+
+    wkb = geodiff.create_wkb_from_gpkg_header(gpkg_wkb)
+    wkt = wkb2wkt(wkb)
+    assert "LINESTRING" in wkt
+
+    # Invalid
+    gpkg_wkb = base64.b64decode("aaaa", validate=True)
+    wkt = wkb2wkt(gpkg_wkb)
+    assert not wkt
+
+
+def test_is_name_allowed():
+    test_cases = [
+        ("project", True),
+        ("ProJect", True),
+        ("Pro123ject", True),
+        ("123PROJECT", True),
+        ("PROJECT", True),
+        # Not valid filename
+        ("project ", False),
+        ("pro ject", True),
+        ("proj-ect", True),
+        ("-project", True),
+        ("proj_ect", True),
+        ("proj.ect", True),
+        # We are removing ! from valids
+        ("proj!ect", False),
+        (" project", False),
+        (".project", False),
+        ("proj~ect", False),
+        ("pro\ject", False),
+        ("pro/ject", False),
+        ("pro|ject", False),
+        ("pro+ject", False),
+        ("pro=ject", False),
+        ("pro>ject", False),
+        ("pro<ject", False),
+        ("pro@ject", False),
+        ("pro#ject", False),
+        ("pro$ject", False),
+        ("pro%ject", False),
+        ("pro^ject", False),
+        ("pro&ject", False),
+        ("pro*ject", False),
+        ("pro?ject", False),
+        ("pro:ject", False),
+        ("pro;ject", False),
+        ("pro,ject", False),
+        ("pro`ject", False),
+        ("pro'ject", False),
+        ('pro"ject', False),
+        ("projectz", True),
+        ("projectZ", True),
+        ("project0", True),
+        ("pro(ject", False),
+        ("pro)ject", False),
+        ("pro{ject", False),
+        ("pro}ject", False),
+        ("pro[ject", False),
+        ("pro]ject", False),
+        ("pro]ject", False),
+        ("CON", False),
+        ("NUL", False),
+        ("NULL", True),
+        ("PRN", False),
+        # is not reserved word
+        ("LPT0", True),
+        ("lpt0", True),
+        ("LPT1", False),
+        ("lpt1", False),
+        ("COM1", False),
+        ("com1", False),
+        ("AUX", False),
+        ("AuX", False),
+        ("projAUXect", True),
+        ("CONproject", True),
+        ("projectCON", True),
+        ("support", False),
+        ("helpdesk", False),
+        ("input", False),
+        ("lutraconsulting", False),
+        ("lutra", False),
+        ("merginmaps", False),
+        ("mergin", False),
+        ("admin", False),
+        ("sales", False),
+        ("", False),
+        ("    ", False),
+        ("😄guy", False),
+        ("会社", True),
+    ]
+
+    for t in test_cases:
+        name = t[0]
+        expected = t[1]
+        assert (
+            not (
+                has_valid_characters(name)
+                and has_valid_first_character(name)
+                and check_filename(name)
+                and is_reserved_word(name)
+            )
+            == expected
+        )
+
+
+filepaths = [
+    ("/home/user/mm/project/survey.gpkg", False),
+    ("C:\Documents\Summer2018.pdf", False),
+    ("\Desktop\Summer2019.pdf", False),
+    ("../image.png", False),
+    ("./image.png", False),
+    ("assets/photos/im?age.png", False),
+    ("assets/photos/CON.png", False),
+    ("assets/photos/CONfile.png", True),
+    ("image.png", True),
+    ("images/image.png", True),
+    ("media/photos/image.png", True),
+    ("med..ia/pho.tos/ima...ge.png", True),
+    ("med/../ia/pho.tos/ima...ge.png", False),
+]
+
+
+@pytest.mark.parametrize("filepath,allow", filepaths)
+def test_is_valid_path(client, filepath, allow):
+    assert is_valid_path(filepath) == allow
+
+
+trailing_spaces_paths = [
+    ("photos /lutraHQ.jpg", "posix", True),
+    ("photo s/ lutraHQ.jpg", "posix", False),
+    ("assets\photos \lutraHQ.jpg", "windows", True),
+    ("assets\  photos\lutraHQ.jpg", "windows", False),
+]
+
+
+@pytest.mark.parametrize("path,path_platform,result", trailing_spaces_paths)
+def test_has_trailing_space(path, path_platform, result):
+    if path_platform == "windows":
+        # we must mock Path to instantiate as Windows path
+        with patch("mergin.sync.utils.Path", PureWindowsPath):
+            assert has_trailing_space(path) is result
+    else:
+        assert has_trailing_space(path) is result
+
+
+def test_get_x_accell_uri(client, monkeypatch):
+    """Test get_x_accell_uri"""
+    monkeypatch.setitem(client.application.config, "LOCAL_PROJECTS", "/data/")
+    # Input URL parts
+    url_parts = ("/data", "archive", "project1", "file.txt")
+    # Expected result
+    expected = "/download/archive/project1/file.txt"
+    assert get_x_accel_uri(*url_parts) == expected
+
+    url_parts = ("archive", "project1", "file.txt")
+    assert get_x_accel_uri(*url_parts) == expected
+
+    url_parts = ()
+    assert get_x_accel_uri(*url_parts) == "/download"
+
+    url_parts = ("/archive", "cc900b78-a8b2-4e80-b546-74c96584bd10-v4.zip")
+    assert (
+        get_x_accel_uri(*url_parts)
+        == "/download/archive/cc900b78-a8b2-4e80-b546-74c96584bd10-v4.zip"
+    )
+
+
+def test_save_diagnostic_log_file(client, app):
+    """Test save diagnostic log file"""
+    # Mock datetime value
+    test_date = "2025-05-09T12:00:00+00:00"
+    app_name = "t" * 256
+    username = "test-user"
+    body = b"Test log content"
+    to_folder = app.config["DIAGNOSTIC_LOGS_DIR"]
+
+    saved_file_name = save_diagnostic_log_file(app_name, username, body)
+    saved_file_path = os.path.join(to_folder, saved_file_name)
+    assert os.path.exists(saved_file_path)
+    assert len(saved_file_name) == 255
+
+    with patch("mergin.utils.datetime") as mock_datetime:
+        mock_datetime.now.return_value = datetime.fromisoformat(test_date)
+        app_name = "test_<>app"
+        saved_file_name = save_diagnostic_log_file(app_name, username, body)
+        # Check if the file was created
+        assert saved_file_name == sanitize_filename(
+            username + "_" + app_name + "_" + test_date + ".log"
+        )
+        saved_file_path = os.path.join(to_folder, saved_file_name)
+        assert os.path.exists(saved_file_path)
+        # Check the content of the file
+        with open(saved_file_path, "r") as f:
+            content = f.read()
+            assert content == body.decode("utf-8")
+
+
+def test_checkpoint_utils():
+    """Test util functions to construct merged versions of higher ranks (checkpoints)"""
+    # exact match to single rank
+    versions = Checkpoint.get_checkpoints(1, 64)
+    assert len(versions) == 1
+    assert versions[0].rank == 3
+    assert versions[0].index == 1
+
+    # v21 would be created from v1-16, v17-20 and v21
+    versions = Checkpoint.get_checkpoints(1, 21)
+    assert len(versions) == 3
+    assert versions[0].rank == 2
+    assert versions[0].index == 1
+    assert versions[1].rank == 1
+    assert versions[1].index == 5
+    assert versions[2].rank == 0
+    assert versions[2].index == 21
+
+    # no cached versions at all, only basic levels v1-v3
+    versions = Checkpoint.get_checkpoints(1, 3)
+    assert len(versions) == 3
+    assert versions[0].rank == 0
+    assert versions[0].index == 1
+    assert versions[1].rank == 0
+    assert versions[1].index == 2
+    assert versions[2].rank == 0
+    assert versions[2].index == 3
+
+    # dummy request
+    versions = Checkpoint.get_checkpoints(2, 1)
+    assert len(versions) == 0
+
+
+def test_get_schema_fields_map():
+    """Test that schema map correctly resolves DB attributes, keeps all fields, and ignores virtual fields."""
+
+    # dummy schema for testing
+    class TestSchema(Schema):
+        # standard field -> map 'name': 'name'
+        name = fields.String()
+        # aliased field -> map 'size': 'disk_usage
+        size = fields.Integer(attribute="disk_usage")
+        # virtual fields -> skip
+        version = fields.Function(lambda obj: "v1")
+        role = fields.Method("get_role")
+        # excluded field - set to None in schema inheritance -> skip
+        hidden_field = None
+
+    schema_map = get_schema_fields_map(TestSchema)
+
+    expected_map = {
+        "name": "name",
+        "size": "disk_usage",
+    }
+    assert schema_map == expected_map
+
+
+def test_check_skip_validation():
+    ALLOWED_FILES = ["script.js", "config/script.js"]
+
+    # We patch the Configuration class attribute directly
+    with patch("mergin.sync.utils.Configuration.UPLOAD_FILES_WHITELIST", ALLOWED_FILES):
+
+        # Test allowed files
+        for file_path in ALLOWED_FILES:
+            assert check_skip_validation(file_path)
+
+        # Test not allowed files
+        assert not check_skip_validation("test.py")
+        assert not check_skip_validation("/some/path/test.py")
+        assert not check_skip_validation("image.png")
+
+
+def test_is_supported_extension():
+    ALLOWED_FILES = ["script.js", "config/script.js"]
+
+    with patch("mergin.sync.utils.Configuration.UPLOAD_FILES_WHITELIST", ALLOWED_FILES):
+        for file_path in ALLOWED_FILES:
+            assert is_supported_extension(file_path)
+
+        # Allowed normal file
+        assert is_supported_extension("image.png")
+
+        # Forbidden file
+        assert not is_supported_extension("test.js")
+
+
+def test_mime_type_validation_skip():
+    ALLOWED_FILES = ["script.js", "config/script.js"]
+    # Mocking get_mimetype to return forbidden mime type
+    with patch(
+        "mergin.sync.utils.get_mimetype", return_value="application/x-python-code"
+    ), patch("mergin.sync.utils.Configuration.UPLOAD_FILES_WHITELIST", ALLOWED_FILES):
+        for file_path in ALLOWED_FILES:
+            assert is_supported_type(file_path)
+
+        # Should be forbidden
+        assert not is_supported_type("other.js")
+
+
+@pytest.mark.parametrize(
+    "detected,expected",
+    [
+        # libmagic < 5.46 (Ubuntu 24.04)
+        ("application/vnd.sqlite3", "application/vnd.sqlite3"),
+        # libmagic >= 5.46 (Ubuntu 26.04)
+        ("application/geopackage+sqlite3", "application/vnd.sqlite3"),
+        ("image/png", "image/png"),
+    ],
+)
+def test_get_mimetype_aliases(detected, expected):
+    """Mime type is the same regardless of libmagic version"""
+    with patch("mergin.sync.utils.magic.from_file", return_value=detected):
+        assert get_mimetype("base.gpkg") == expected
+
+
+def test_allowed_extensions_override():
+    """Extensions in UPLOAD_EXTENSIONS_WHITELIST are accepted even though they are in FORBIDDEN_EXTENSIONS."""
+    with patch(
+        "mergin.sync.utils.Configuration.UPLOAD_EXTENSIONS_WHITELIST", [".py", ".sh"]
+    ):
+        # forbidden by default, now explicitly allowed
+        assert is_supported_extension("model.py")
+        assert is_supported_extension("scripts/deploy.sh")
+        # match is case-insensitive
+        assert is_supported_extension("MODEL.PY")
+        # extensions not in the override stay blocked
+        assert not is_supported_extension("malware.exe")
+        assert not is_supported_extension("app.js")
+
+
+def test_extension_whitelist_skips_mime_check():
+    """A whitelisted extension also bypasses the MIME check via check_skip_validation."""
+    with patch("mergin.sync.utils.get_mimetype", return_value="text/x-shellscript"):
+        # blocked when the extension is not whitelisted
+        with patch("mergin.sync.utils.Configuration.UPLOAD_EXTENSIONS_WHITELIST", []):
+            assert not is_supported_type("deploy.sh")
+        # allowed once the extension is whitelisted
+        with patch(
+            "mergin.sync.utils.Configuration.UPLOAD_EXTENSIONS_WHITELIST", [".sh"]
+        ):
+            assert is_supported_type("deploy.sh")

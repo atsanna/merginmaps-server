@@ -1,0 +1,48 @@
+# demo data
+projects*/
+data/
+mergin_db
+diagnostic_logs
+
+logs
+*.log
+.DS_Store
+*.stackdump
+
+# dependencies
+deps/
+.idea
+*.iml
+
+venv/
+.vscode
+
+# production env
+.prod.env
+.sso.env
+
+# generated documentation
+gen
+
+# pyenv
+.python-version
+web-app/.node-version
+
+# datadir for database
+mergin-db-ce
+
+docker-compose.local.yml
+
+# SSO
+*.pem
+*.crt
+
+CLAUDE.md
+# Local Claude Code skills
+.claude/commands/
+
+# local dev server settings, see development.md
+server/.dev.env
+
+# chiavi locali, non pubblicare
+server/mergin/.env
