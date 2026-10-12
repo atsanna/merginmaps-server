@@ -26,6 +26,7 @@ def migration_app(migration_engine):
         "mergin_plus.audit.models",
         "mergin_plus.webhooks.models",
         "mergin_plus.sso.models",
+        "mergin_plus.maps.models",
     ):
         importlib.import_module(module_path)
 

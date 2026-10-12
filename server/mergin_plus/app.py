@@ -29,6 +29,7 @@ PUBLIC_KEYS = [
     "INSTANCE_NAME",
     # QGIS plugin and mobile app offer SSO login when sso_enabled is true
     "SSO_ENABLED",
+    "MAPS_ENABLED",
 ]
 
 
@@ -105,6 +106,13 @@ def register(app: Flask):
 
     csrf.exempt(sso_bp)
     app.register_blueprint(sso_bp)
+
+    # web maps (WMS proxy streams binary responses, so plain Flask views too)
+    from .maps.listeners import register_listeners as register_maps_listeners
+    from .maps.views import bp as maps_bp
+
+    app.register_blueprint(maps_bp)
+    register_maps_listeners()
 
     # e-mail templates
     app.register_blueprint(Blueprint("plus", __name__, template_folder="templates"))

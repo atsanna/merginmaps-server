@@ -41,6 +41,13 @@ celery -A mergin_plus.wsgi.celery beat
 | `SSO_SESSION_EXPIRATION` | `1209600` | Lifetime (seconds) of tokens issued after SSO login |
 | `SSO_TENANT_FLOW` | `multi` | `multi`: connection chosen by e-mail domain, `single`: `SSO_DEFAULT_TENANT` for everybody |
 | `SSO_ALLOWED_REDIRECT_URIS` | QGIS (`http://localhost:10042/` …) and mobile app | Client redirect URI prefixes, comma separated |
+| `MAPS_ENABLED` | `false` | Enable web maps |
+| `OVERVIEW_DATA` | `<LOCAL_PROJECTS>/map_overviews` | Directory with versions prepared for QGIS Server (shared volume) |
+| `QGIS_SERVER_DATA` | | Path of `OVERVIEW_DATA` inside the QGIS Server container, if different |
+| `QGIS_SERVER_URL` | (`WMTS_SERVER_URL`) | QGIS Server OWS endpoint, e.g. `http://qgis-nginx/ows/` |
+| `MAPS_BASEMAP_URL` | OpenStreetMap tiles | Default XYZ basemap of web maps |
+| `MAPS_BASEMAP_ATTRIBUTION` | OpenStreetMap | Basemap attribution |
+| `VECTOR_TILES_STYLE_URL` | | Optional vector tiles basemap style |
 | `INSTANCE_NAME` | | Server name shown in the dashboard (`DASHBOARD_LOGO_URL` from CE is exposed too) |
 
 With the add-on:
@@ -121,6 +128,20 @@ of the connections is `<MERGIN_BASE_URL>/v2/sso/callback`. Users are created on 
 | `POST /v2/sso/token` | OAuth 2.0 token endpoint, returns a Mergin bearer token as `access_token` |
 | `GET /v2/sso/login?email=&next=` | Dashboard sign in (session cookie) |
 | `GET /v2/sso/callback` | Redirect target of Polis |
+
+## Web maps
+
+With `MAPS_ENABLED`, every new project version with a QGIS project file (`.qgs`/`.qgz` in the project root)
+is processed by a Celery task: the files of the version are hard-linked (or copied) to
+`OVERVIEW_DATA/<project id>/v<version>` and the QGIS project is read without QGIS libraries
+(layers, layer tree, map themes, extent, whether layer data are packaged in the project).
+QGIS Server (upstream `qgis/qgis-server` image) renders the maps from that directory.
+
+| Endpoint | Description |
+|---|---|
+| `GET /v2/projects/{id}/map` | Map configuration (layers, tree, themes, extent, basemap, `wms_url`), 404 "Map config does not exist" |
+| `POST /v2/projects/{id}/map/refresh` | Process latest version again (writers) |
+| `GET /v2/projects/{id}/map/wms` | WMS proxy (GetMap, GetLegendGraphic, GetFeatureInfo, GetCapabilities) with project read permission |
 
 ## Roles
 

@@ -16,6 +16,7 @@ from celery.schedules import crontab
 from application import application, celery  # CE entry point
 from . import register
 from .audit.tasks import remove_old_audit_events
+from .maps import tasks as maps_tasks  # noqa: F401 (registers map overview task)
 from .webhooks import delivery  # noqa: F401 (registers webhook delivery task)
 from .sso.tasks import remove_expired_sso_grants
 from .transfer.tasks import remove_expired_transfers

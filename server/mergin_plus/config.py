@@ -2,9 +2,12 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import os
+
 from decouple import Csv, config
 
 from mergin.config import Configuration as MainConfiguration
+from mergin.sync.config import Configuration as SyncConfiguration
 
 
 class Configuration(object):
@@ -67,3 +70,27 @@ class Configuration(object):
         "https://hello.merginmaps.com/mobile/sso-redirect",
         cast=Csv(),
     )
+    # web maps of projects (QGIS Server)
+    MAPS_ENABLED = config("MAPS_ENABLED", default=False, cast=bool)
+    # directory with project data prepared for QGIS Server, shared with the QGIS Server container
+    OVERVIEW_DATA = config(
+        "OVERVIEW_DATA",
+        default=os.path.join(SyncConfiguration.LOCAL_PROJECTS, "map_overviews"),
+    )
+    # path of OVERVIEW_DATA as seen by QGIS Server (when mounted elsewhere)
+    QGIS_SERVER_DATA = config("QGIS_SERVER_DATA", default="")
+    # QGIS Server OWS endpoint
+    QGIS_SERVER_URL = config(
+        "QGIS_SERVER_URL", default=config("WMTS_SERVER_URL", default="")
+    )
+    QGIS_SERVER_TIMEOUT = config("QGIS_SERVER_TIMEOUT", default=60, cast=int)
+    # default basemap of web maps (XYZ raster tiles), OpenStreetMap unless configured
+    MAPS_BASEMAP_URL = config(
+        "MAPS_BASEMAP_URL", default="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    )
+    MAPS_BASEMAP_ATTRIBUTION = config(
+        "MAPS_BASEMAP_ATTRIBUTION",
+        default='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    )
+    # optional vector tiles basemap (Mapbox GL style URL)
+    VECTOR_TILES_STYLE_URL = config("VECTOR_TILES_STYLE_URL", default="")

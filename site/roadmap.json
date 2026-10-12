@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-12",
   "stats": {
-    "tests": 67,
+    "tests": 80,
     "endpoints": 20
   },
   "available": [
@@ -64,6 +64,10 @@
     {
       "it": "Single sign-on SAML/OIDC tramite Ory Polis, compatibile con plugin QGIS e app mobile",
       "en": "SAML/OIDC single sign-on through Ory Polis, compatible with QGIS plugin and mobile app"
+    },
+    {
+      "it": "Mappe web: elaborazione delle versioni e servizio WMS tramite QGIS Server (API)",
+      "en": "Web maps: version processing and WMS through QGIS Server (API)"
     }
   ],
   "phases": [
@@ -405,26 +409,26 @@
       "steps": [
         {
           "n": "17",
-          "status": "wip",
+          "status": "done",
           "title": {
             "it": "Elaborazione delle versioni",
             "en": "Version processing"
           },
           "desc": {
-            "it": "Worker che legge il progetto QGIS e prepara layer, legende e temi.",
-            "en": "Worker reading the QGIS project and preparing layers, legends and themes."
+            "it": "A ogni nuova versione il progetto QGIS viene letto (layer, albero, temi, estensione, dati inclusi nel progetto) e i file preparati per QGIS Server.",
+            "en": "On every new version the QGIS project is read (layers, tree, themes, extent, packaged data) and files are prepared for QGIS Server."
           }
         },
         {
           "n": "18",
-          "status": "todo",
+          "status": "done",
           "title": {
             "it": "QGIS Server",
             "en": "QGIS Server"
           },
           "desc": {
-            "it": "Servizio WMS/WMTS con controllo dei permessi.",
-            "en": "WMS/WMTS service with permission checks."
+            "it": "Proxy WMS verso QGIS Server con controllo dei permessi di progetto (GetMap, legende, informazioni sugli elementi).",
+            "en": "WMS proxy to QGIS Server with project permission checks (GetMap, legends, feature info)."
           }
         },
         {
