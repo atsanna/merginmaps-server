@@ -145,7 +145,19 @@ paths:
                 email:
                   type: string
                 role:
-                  $ref: "#/components/schemas/MemberRole"
+                  type: string
+                  enum:
+                    - guest
+                    - reader
+                    - editor
+                    - writer
+                    - admin
+                    - owner
+                projects:
+                  description: Direct project access granted on acceptance, required for guests
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/InvitationProject"
       responses:
         "201":
           description: Invitation
@@ -197,6 +209,60 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Invitation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/projects/{id}/invitations:
+    parameters:
+      - name: id
+        in: path
+        description: Project uuid
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags:
+        - members
+      summary: Share project with e-mail, non registered addresses are invited as workspace guests
+      operationId: mergin_plus.workspace.members_controller.share_project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                role:
+                  type: string
+                  enum:
+                    - reader
+                    - editor
+                    - writer
+                    - owner
+                  default: reader
+      responses:
+        "200":
+          description: Access granted to existing user or pending invitation extended
+          content:
+            application/json:
+              schema:
+                type: object
+        "201":
+          description: Invitation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invitation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -376,3 +442,23 @@ components:
           type: string
         expired:
           type: boolean
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvitationProject"
+    InvitationProject:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+            - reader
+            - editor
+            - writer
+            - owner
+          default: reader

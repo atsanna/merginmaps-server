@@ -14,6 +14,7 @@ from mergin.auth.schemas import UserInfoSchema
 from mergin.auth.models import User
 from mergin.celery import send_email_async
 from mergin.sync.interfaces import WorkspaceRole
+from mergin.sync.models import Project, ProjectRole
 from .models import Workspace, WorkspaceInvitation, WorkspaceMember
 
 # roles which can be granted through membership, guests are users with direct project access only
@@ -80,6 +81,7 @@ def invitation_to_dict(inv: WorkspaceInvitation) -> dict:
         "created": inv.created.isoformat() + "Z",
         "expires_at": inv.expires_at.isoformat() + "Z",
         "expired": inv.is_expired,
+        "projects": inv.projects,
     }
 
 
@@ -173,31 +175,104 @@ def remove_member(id: int, user_id: int):
 # invitations managed by workspace admins
 
 
+def _parse_invitation_projects(ws: Workspace, items) -> list:
+    """Validate list of {"id", "role"} of workspace projects for invitation"""
+    result = []
+    for item in items or []:
+        try:
+            role = ProjectRole(item.get("role", ProjectRole.READER.value))
+        except ValueError:
+            abort(400, f"Invalid project role: {item.get('role')}")
+        project = Project.query.filter_by(
+            id=item.get("id"), workspace_id=ws.id, removed_at=None
+        ).first()
+        if not project:
+            abort(400, f"Project {item.get('id')} not found in workspace")
+        result.append({"id": str(project.id), "role": role.value})
+    return result
+
+
+def _invite(ws: Workspace, email: str, role: WorkspaceRole, projects: list):
+    """Create invitation, or extend a pending one with projects, and send e-mail.
+    Returns (invitation, created)
+    """
+    inv = WorkspaceInvitation.query.filter_by(workspace_id=ws.id, email=email).first()
+    if inv and inv.is_expired:
+        db.session.delete(inv)
+        db.session.flush()
+        inv = None
+    created = inv is None
+    if created:
+        inv = WorkspaceInvitation(ws, email, role, current_user, projects)
+        db.session.add(inv)
+    else:
+        if role is not WorkspaceRole.GUEST and role >= WorkspaceRole(inv.role):
+            inv.role = role.value
+        for item in projects:
+            inv.add_project(item["id"], item["role"])
+        inv.renew()
+    db.session.commit()
+    send_invitation_email(inv)
+    return inv, created
+
+
 @auth_required
 def create_invitation(id: int):
+    """Invite e-mail to workspace as member, or as guest with access to listed projects"""
     ws = _get_workspace(id)
     _require_admin(ws)
     email = (request.json.get("email") or "").strip().lower()
     if "@" not in email:
         abort(400, "Invalid email")
-    role = _parse_role(request.json.get("role"))
+    value = request.json.get("role")
+    projects = _parse_invitation_projects(ws, request.json.get("projects"))
+    if value == WorkspaceRole.GUEST.value:
+        if not projects:
+            abort(400, "Guest invitation requires projects")
+        role = WorkspaceRole.GUEST
+    else:
+        role = _parse_role(value)
     _check_can_grant(ws, role)
 
     user = User.query.filter(func.lower(User.email) == email).first()
     if user and ws.get_member(user.id):
         abort(409, "User is already a workspace member")
-    inv = WorkspaceInvitation.query.filter_by(workspace_id=ws.id, email=email).first()
-    if inv and not inv.is_expired:
+    existing = WorkspaceInvitation.query.filter_by(
+        workspace_id=ws.id, email=email
+    ).first()
+    if existing and not existing.is_expired:
         abort(409, "Invitation already exists")
-    if inv:
-        # replace expired invitation
-        db.session.delete(inv)
-        db.session.flush()
-    inv = WorkspaceInvitation(ws, email, role, current_user)
-    db.session.add(inv)
-    db.session.commit()
-    send_invitation_email(inv)
+    inv, _ = _invite(ws, email, role, projects)
     return invitation_to_dict(inv), 201
+
+
+@auth_required
+def share_project(id: str):
+    """Share project with e-mail: existing users get direct access,
+    others are invited to the workspace as guests of the project (or the pending invitation is extended)
+    """
+    from mergin.sync.permissions import ProjectPermissions, require_project_by_uuid
+
+    project = require_project_by_uuid(id, ProjectPermissions.Update)
+    ws = current_app.ws_handler.get(project.workspace_id)
+    email = (request.json.get("email") or "").strip().lower()
+    if "@" not in email:
+        abort(400, "Invalid email")
+    try:
+        role = ProjectRole(request.json.get("role", ProjectRole.READER.value))
+    except ValueError:
+        abort(400, f"Invalid project role: {request.json.get('role')}")
+
+    user = User.query.filter(func.lower(User.email) == email, User.active).first()
+    if user:
+        project.set_role(user.id, role)
+        db.session.commit()
+        return {"email": email, "user_id": user.id, "role": role.value}, 200
+
+    inv, created = _invite(
+        ws, email, WorkspaceRole.GUEST, [{"id": str(project.id), "role": role.value}]
+    )
+    return invitation_to_dict(inv), 201 if created else 200
 
 
 @auth_required
@@ -263,15 +338,11 @@ def user_invitations():
 def accept_invitation(uuid: str):
     inv = _get_user_invitation(uuid)
     ws = inv.workspace
-    member = ws.get_member(current_user.id)
-    # keep higher role if user is already a member
-    if not member or WorkspaceRole(inv.role) >= WorkspaceRole(member.role):
-        inv.accept(current_user)
-    else:
-        db.session.delete(inv)
+    inv.accept(current_user)
     db.session.commit()
     member = ws.get_member(current_user.id)
-    return member_to_dict(current_user, WorkspaceRole(member.role)), 200
+    role = WorkspaceRole(member.role) if member else WorkspaceRole.GUEST
+    return member_to_dict(current_user, role), 200
 
 
 @auth_required

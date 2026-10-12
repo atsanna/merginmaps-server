@@ -8,12 +8,12 @@ from typing import List, Optional, Tuple
 
 from flask import current_app
 from sqlalchemy import func
-from sqlalchemy.dialects.postgresql import ENUM, UUID
+from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 
 from mergin.app import db
 from mergin.auth.models import User
 from mergin.sync.interfaces import AbstractWorkspace, WorkspaceRole
-from mergin.sync.models import Project, ProjectUser
+from mergin.sync.models import Project, ProjectRole, ProjectUser
 
 
 class Workspace(db.Model, AbstractWorkspace):
@@ -249,14 +249,24 @@ class WorkspaceInvitation(db.Model):
     )
     created = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    # direct access to workspace projects granted on acceptance, list of {"id": <uuid>, "role": <project role>}
+    projects = db.Column(JSONB, nullable=False, default=list, server_default="[]")
 
     workspace = db.relationship("Workspace")
     inviter = db.relationship("User")
 
     __table_args__ = (db.UniqueConstraint("workspace_id", "email"),)
 
-    def __init__(self, workspace: Workspace, email: str, role: WorkspaceRole, inviter):
+    def __init__(
+        self,
+        workspace: Workspace,
+        email: str,
+        role: WorkspaceRole,
+        inviter,
+        projects: List[dict] = None,
+    ):
         self.uuid = uuid.uuid4()
+        self.projects = projects or []
         self.workspace_id = workspace.id
         self.workspace = workspace
         self.email = email.strip().lower()
@@ -274,8 +284,28 @@ class WorkspaceInvitation(db.Model):
     def is_expired(self) -> bool:
         return self.expires_at < datetime.utcnow()
 
-    def accept(self, user: User) -> "WorkspaceMember":
-        """Make user workspace member, invitation is removed, does not commit"""
-        member = self.workspace.set_role(user.id, WorkspaceRole(self.role))
+    def add_project(self, project_id: str, role: str) -> None:
+        """Grant (or update) direct project access on acceptance, does not commit"""
+        projects = [p for p in self.projects if p["id"] != str(project_id)]
+        projects.append({"id": str(project_id), "role": role})
+        # reassign to let sqlalchemy detect the change
+        self.projects = projects
+
+    def accept(self, user: User) -> Optional["WorkspaceMember"]:
+        """Apply invitation to user and remove it, does not commit.
+        Members get a workspace role (unless they already have a higher one), guests only direct project access.
+        """
+        member = self.workspace.get_member(user.id)
+        role = WorkspaceRole(self.role)
+        if role is not WorkspaceRole.GUEST and (
+            not member or role >= WorkspaceRole(member.role)
+        ):
+            member = self.workspace.set_role(user.id, role)
+        for item in self.projects:
+            project = Project.query.filter_by(
+                id=item["id"], workspace_id=self.workspace_id, removed_at=None
+            ).first()
+            if project:
+                project.set_role(user.id, ProjectRole(item["role"]))
         db.session.delete(self)
         return member

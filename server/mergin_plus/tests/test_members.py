@@ -315,3 +315,100 @@ def test_register_from_invitation(send_email_mock, client):
         anonymous, f"/v2/invitations/{uuid}/register", {"password": "Existing123!"}
     )
     assert resp.status_code == 409
+
+
+@patch("mergin.celery.send_email_async.apply_async")
+def test_guest_invitation(send_email_mock, client):
+    owner = add_user("owner", "Owner123!")
+    ws = _workspace("team", owner)
+    p1 = create_project("p1", ws, owner)
+    p2 = create_project("p2", ws, owner)
+    guest = add_user("guest", "Guest1234!")
+    url = f"/v2/workspaces/{ws.id}/invitations"
+    login(client, "owner", "Owner123!")
+    assert (
+        _post(client, url, {"email": "guest@mergin.com", "role": "guest"}).status_code
+        == 400
+    )
+    bad = {
+        "email": "guest@mergin.com",
+        "role": "guest",
+        "projects": [{"id": str(p1.id), "role": "boss"}],
+    }
+    assert _post(client, url, bad).status_code == 400
+    resp = _post(
+        client,
+        url,
+        {
+            "email": "guest@mergin.com",
+            "role": "guest",
+            "projects": [{"id": str(p1.id), "role": "writer"}],
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json["projects"] == [{"id": str(p1.id), "role": "writer"}]
+
+    login(client, "guest", "Guest1234!")
+    resp = client.post(f"/v2/invitations/{resp.json['uuid']}/accept")
+    assert resp.status_code == 200
+    assert resp.json["workspace_role"] == "guest"
+    assert ws.get_member(guest.id) is None
+    assert ws.get_user_role(guest) is WorkspaceRole.GUEST
+    assert p1.get_role(guest.id) is ProjectRole.WRITER
+    assert p2.get_role(guest.id) is None
+
+
+@patch("mergin.celery.send_email_async.apply_async")
+def test_share_project_with_email(send_email_mock, client):
+    owner = add_user("owner", "Owner123!")
+    reader = add_user("reader", "Reader123!")
+    ws = _workspace("team", owner, (reader, WorkspaceRole.READER))
+    p1 = create_project("p1", ws, owner)
+    p2 = create_project("p2", ws, owner)
+    existing = add_user("existing", "Existing123!")
+
+    # readers can not share
+    login(client, "reader", "Reader123!")
+    resp = _post(client, f"/v2/projects/{p1.id}/invitations", {"email": "x@y.com"})
+    assert resp.status_code == 403
+
+    login(client, "owner", "Owner123!")
+    # existing user gets access directly
+    resp = _post(
+        client,
+        f"/v2/projects/{p1.id}/invitations",
+        {"email": "Existing@mergin.com", "role": "editor"},
+    )
+    assert resp.status_code == 200
+    assert p1.get_role(existing.id) is ProjectRole.EDITOR
+
+    # unknown e-mail is invited as guest, second share extends the invitation
+    resp = _post(
+        client, f"/v2/projects/{p1.id}/invitations", {"email": "new@person.com"}
+    )
+    assert resp.status_code == 201
+    assert resp.json["role"] == "guest"
+    resp = _post(
+        client,
+        f"/v2/projects/{p2.id}/invitations",
+        {"email": "new@person.com", "role": "writer"},
+    )
+    assert resp.status_code == 200
+    assert {p["id"]: p["role"] for p in resp.json["projects"]} == {
+        str(p1.id): "reader",
+        str(p2.id): "writer",
+    }
+    assert WorkspaceInvitation.query.count() == 1
+
+    # new person registers from the invitation and gets both projects
+    anonymous = current_app.test_client()
+    resp = _post(
+        anonymous,
+        f"/v2/invitations/{resp.json['uuid']}/register",
+        {"password": "Newperson1!"},
+    )
+    assert resp.status_code == 201
+    user = User.query.filter_by(email="new@person.com").first()
+    assert p1.get_role(user.id) is ProjectRole.READER
+    assert p2.get_role(user.id) is ProjectRole.WRITER
+    assert ws.get_user_role(user) is WorkspaceRole.GUEST

@@ -56,7 +56,8 @@ On an existing Community Edition database the global workspace (`GLOBAL_WORKSPAC
 | `GET /v1/workspace/{id}/usage` | Storage, projects, members and contributors count (admin) |
 | `GET /v2/workspaces/{id}/members` | Workspace members (admin) |
 | `GET/PATCH/DELETE /v2/workspaces/{id}/members/{user_id}` | Member detail, role change (`workspace_role` or `role`, `reset_projects_roles`), removal; members can remove themselves |
-| `GET/POST /v2/workspaces/{id}/invitations` | List / create invitations (`email`, `role`) (admin) |
+| `GET/POST /v2/workspaces/{id}/invitations` | List / create invitations (`email`, `role`, `projects` with `id` and `role`; guests need projects) (admin) |
+| `POST /v2/projects/{id}/invitations` | Share project with an e-mail: existing users get direct access, others are invited as guests (pending invitation is extended) |
 | `DELETE /v2/workspaces/{id}/invitations/{uuid}`, `POST .../resend` | Revoke / renew and resend invitation (admin) |
 | `GET /v2/invitations`, `POST /v2/invitations/{uuid}/accept`, `.../decline` | Invitations of session user |
 | `POST /v2/invitations/{uuid}/register` | Create account from invitation link, works with `USER_SELF_REGISTRATION=false` |
