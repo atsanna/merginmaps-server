@@ -29,7 +29,14 @@ from ..sync.models import (
 from ..sync.files import ProjectFileChange, PushChangeType, files_changes_from_upload
 from ..sync.workspace import GlobalWorkspace
 from ..app import db
-from . import json_headers, DEFAULT_USER, test_project, test_project_dir, TMP_DIR
+from . import (
+    json_headers,
+    DEFAULT_USER,
+    test_project,
+    test_project_dir,
+    TMP_DIR,
+    test_workspace_id,
+)
 
 CHUNK_SIZE = 1024
 
@@ -99,8 +106,9 @@ def add_user(username="random", password="random", is_admin=False) -> User:
 
 
 def create_workspace():
-    ws = GlobalWorkspace()
-    return ws
+    # with enterprise features the global workspace is a db row created by fixtures
+    ws = current_app.ws_handler.get(test_workspace_id)
+    return ws or GlobalWorkspace()
 
 
 def login(client, username, password):

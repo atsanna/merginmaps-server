@@ -20,6 +20,14 @@ jobs:
             pytest_args: "-v -n auto --cov=mergin --cov-report=term mergin/tests"
           - suite: migration
             pytest_args: "-v mergin/test_migrations"
+          # CE suite against workspaces stored in db (mergin_plus package)
+          - suite: server-enterprise
+            test_enterprise: "1"
+            pytest_args: "-v -n auto mergin/tests"
+          - suite: enterprise
+            pytest_args: "-v -n auto --cov=mergin_plus --cov-report=term mergin_plus/tests"
+          - suite: enterprise-migration
+            pytest_args: "-v mergin_plus/test_migrations"
 
     services:
       postgres:
@@ -54,6 +62,8 @@ jobs:
           pipenv install --dev --deploy --verbose --python 3.12
 
       - name: Run tests
+        env:
+          TEST_ENTERPRISE: ${{ matrix.test_enterprise || '0' }}
         run: |
           cd server
           pipenv run pytest ${{ matrix.pytest_args }}

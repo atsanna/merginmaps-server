@@ -1,3 +1,4 @@
+import pytest
 import os
 from flask import url_for, current_app
 import json
@@ -45,6 +46,7 @@ def test_healthcheck(client, monkeypatch):
     db.engine.connect = _connect
 
 
+@pytest.mark.global_workspace
 def test_server_updates(client):
     """Test proxy endpoint to fetch server updates information"""
     assert client.application.config["SERVER_TYPE"] == "ce"

@@ -34,28 +34,37 @@ from mergin.stats.config import Configuration
 from mergin.stats.tasks import save_statistics, send_statistics
 from mergin.stats.app import register as register_stats
 from mergin.otel.app import register as register_otel
+from mergin_plus.config import Configuration as PlusConfiguration
 
 Configuration.SERVER_TYPE = "ce"
 Configuration.USER_SELF_REGISTRATION = False
 
-application = create_app(
-    [
-        "DOCS_URL",
-        "SERVER_TYPE",
-        "COLLECT_STATISTICS",
-        "USER_SELF_REGISTRATION",
-        "GLOBAL_ADMIN",
-        "GLOBAL_READ",
-        "GLOBAL_WRITE",
-        "ENABLE_SUPERADMIN_ASSIGNMENT",
-        "DIAGNOSTIC_LOGS_URL",
-        "V2_PUSH_ENABLED",
-    ]
-)
+public_keys = [
+    "DOCS_URL",
+    "SERVER_TYPE",
+    "COLLECT_STATISTICS",
+    "USER_SELF_REGISTRATION",
+    "GLOBAL_ADMIN",
+    "GLOBAL_READ",
+    "GLOBAL_WRITE",
+    "ENABLE_SUPERADMIN_ASSIGNMENT",
+    "DIAGNOSTIC_LOGS_URL",
+    "V2_PUSH_ENABLED",
+]
+celery_packages = ["mergin.auth", "mergin.sync", "mergin.stats"]
+if PlusConfiguration.ENTERPRISE_ENABLED:
+    public_keys.append("USER_WORKSPACES_ALLOWED")
+    celery_packages.append("mergin_plus.workspace")
+
+application = create_app(public_keys)
 register_stats(application)
 register_otel(application)
+if PlusConfiguration.ENTERPRISE_ENABLED:
+    from mergin_plus import register as register_plus
+
+    register_plus(application)
 # patch celery object with application settings and attach flask context to it
-configure_celery(celery, application, ["mergin.auth", "mergin.sync", "mergin.stats"])
+configure_celery(celery, application, celery_packages)
 
 
 # set up period celery tasks
@@ -79,7 +88,8 @@ def setup_periodic_tasks(sender, **kwargs):
         save_statistics,
         name="Save usage statistics to database",
     )
-    if Configuration.COLLECT_STATISTICS:
+    # this fork never reports itself to Mergin Maps as an Enterprise Edition installation
+    if Configuration.COLLECT_STATISTICS and not PlusConfiguration.ENTERPRISE_ENABLED:
         sender.add_periodic_task(
             crontab(hour=randint(0, 5), minute=randint(0, 60)),
             send_statistics,
@@ -95,3 +105,11 @@ def setup_periodic_tasks(sender, **kwargs):
         remove_unused_chunks,
         name="clean up of outdated chunks",
     )
+    if PlusConfiguration.ENTERPRISE_ENABLED:
+        from mergin_plus.workspace.tasks import remove_closed_workspaces
+
+        sender.add_periodic_task(
+            crontab(hour=4, minute=0),
+            remove_closed_workspaces,
+            name="remove closed workspaces",
+        )

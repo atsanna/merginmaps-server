@@ -169,6 +169,7 @@ def test_file_history(client, diff_project):
     assert "location" not in history["v7"]
 
 
+@pytest.mark.global_workspace
 def test_get_paginated_projects(client, monkeypatch):
     user = User.query.filter_by(username="mergin").first()
     test_workspace = create_workspace()
@@ -1261,6 +1262,7 @@ def test_stale_upload_takeover(client, app):
     assert failure.error_details == "Push artefact removed by subsequent push"
 
 
+@pytest.mark.global_workspace
 def test_exceed_data_limit(client, monkeypatch):
     project = Project.query.filter_by(
         name=test_project, workspace_id=test_workspace_id
@@ -1889,6 +1891,7 @@ clone_project_data = [
 ]
 
 
+@pytest.mark.global_workspace
 @pytest.mark.parametrize("data,username,expected", clone_project_data)
 def test_clone_project(client, data, username, expected, monkeypatch):
     # create new version with diff
@@ -2336,6 +2339,7 @@ def test_orphan_project(client):
     assert not next((p for p in created_projects if p.name == "orphan"), None)
 
 
+@pytest.mark.global_workspace
 def test_inactive_project(client, diff_project, monkeypatch):
     """Project set for removal is not listed and can not be updated"""
     user = add_user("tests", "tests")

@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
 
+import pytest
 from dataclasses import asdict
 from datetime import timezone, datetime
 import json
@@ -18,6 +19,7 @@ from ..stats.models import MerginInfo, MerginStatistics, ServerCallhomeData
 from .utils import Response, add_user, create_project, create_workspace
 
 
+@pytest.mark.global_workspace
 def test_send_statistics(app, caplog, monkeypatch):
     """Test job to send usage statistics.
     Test opt-out, repeated request and 3rd party service errors.

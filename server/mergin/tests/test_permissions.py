@@ -27,6 +27,7 @@ from .utils import (
 )
 
 
+@pytest.mark.global_workspace
 def test_project_permissions(client, monkeypatch):
     owner = add_user("owner", "pwd")
     test_workspace = create_workspace()

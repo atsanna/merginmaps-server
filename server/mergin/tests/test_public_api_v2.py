@@ -145,6 +145,7 @@ def test_rename_project(client):
     assert response.json["code"] == "InvalidProjectName"
 
 
+@pytest.mark.global_workspace
 def test_project_members(client, monkeypatch):
     """Test CRUD endpoints for direct project members"""
     project = Project.query.filter_by(
@@ -1093,6 +1094,7 @@ def test_create_version_unsupported_file_names(client):
     )
 
 
+@pytest.mark.global_workspace
 def test_create_version_failures(client):
     """Test various project push failures beyond invalid payload"""
     project = Project.query.filter_by(
@@ -1158,6 +1160,7 @@ def test_create_version_failures(client):
         assert project.latest_version == 1
 
 
+@pytest.mark.global_workspace
 def test_create_version_permanent_error_takes_priority(client):
     """Permanent errors (e.g. storage limit) must be reported before a
     version conflict, otherwise clients would rebase/retry an upload that
@@ -1424,6 +1427,7 @@ def test_project_pull_diffs(client, diff_project):
     assert response.status_code == 200
 
 
+@pytest.mark.global_workspace
 def test_list_workspace_projects(client):
     admin = User.query.filter_by(username=DEFAULT_USER[0]).first()
     test_workspace = create_workspace()
@@ -1582,6 +1586,7 @@ def test_create_project(client):
     assert not Project.query.filter_by(name="other").count()
 
 
+@pytest.mark.global_workspace
 def test_list_projects_in_batch(client):
     """Test batch project listing endpoint."""
     admin = User.query.filter_by(username=DEFAULT_USER[0]).first()

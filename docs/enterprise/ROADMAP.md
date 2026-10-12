@@ -33,12 +33,12 @@ Out of scope: mandatory telemetry, SaaS billing/subscriptions, Mergin-hosted bas
 
 ### Backend
 
-- New Python package **`server/mergin_ee/`** (name to confirm), an *app extension* registered on top of `mergin.create_app`:
+- New Python package **`server/mergin_plus/`**, an *app extension* registered on top of `mergin.create_app`:
   - replaces `application.ws_handler` / `application.project_handler` (`server/mergin/app.py` ~438) with `WorkspaceHandler` / `ProjectHandler` implementations backed by real tables;
   - registers its own Connexion API specs (`/v1/workspace*`, `/v2/workspaces/*`, `/app/...` private endpoints, admin endpoints);
   - plugs into CE signals (`project_access_granted`, `push_finished`, `project_version_created`, `user_created`, `user_account_closed`…) for e-mails, maps, audit, webhooks;
   - adds Celery tasks to the existing beat schedule (expired invitations/transfers, closed workspace purge, overview generation).
-- Activation: `ENTERPRISE_ENABLED=true` (or `SERVER_TYPE=ee`, see open question Q1) in `server/application.py`; with it off, the package is not loaded and the server is pure CE.
+- Activation: `ENTERPRISE_ENABLED=true` in `server/application.py`; with it off, the package is not loaded and the server is pure CE.
 - Database: Alembic **`enterprise` branch** on top of `community` (already supported by `alembic.ini` `version_locations`). First migration creates `workspace` for every existing `project.workspace_id` (the global workspace id=1 becomes a real row), then adds the FK.
 - Minimal, upstream-friendly patches to CE only where a hook is missing (each one listed in the PR and kept small so upstream merges stay easy).
 
@@ -113,12 +113,18 @@ Ordered by dependency; each milestone is one or more PRs, merged only with green
 - Compatibility: CI job using the public `mergin-client` (python-api-client) against the server for workspace/member/invitation endpoints.
 - Integration jobs (SSO, maps) separate and allowed to run only on relevant path changes.
 
-## 5. Open questions (need your decision)
+## 5. Decisions
 
-1. **Edition flag**: report `server_type: "ee"` on `/config` (needed for QGIS plugin / mobile to show workspace UI) or a new value (e.g. `"ee-oss"`) and accept that clients may hide features? Reporting `ee` could confuse users and Mergin's support/telemetry.
-2. **Telemetry**: keep CE's optional statistics but **disable by default** in EE mode, so this fork never reports itself to Mergin as an Enterprise install?
-3. **Package name / branding**: `mergin_ee` vs a neutral name (e.g. `mergin_plus`) to avoid confusion with the commercial product name.
-4. **Fork extras (M7)**: include audit log / webhooks / branding, or keep strictly to documented EE features?
-5. **Web maps basemap default**: OSM raster tiles (with attribution), or require the admin to configure one?
-6. **Branch workflow**: one PR per milestone into `main`, or longer-lived feature branches?
-7. **Upstream sync**: how often to merge from `MerginMaps/server` (their sync-API rewrite is in progress and may move the hooks).
+Defaults adopted while working locally (the repository could not be pushed); all can be revisited.
+
+1. **Edition flag**: with `ENTERPRISE_ENABLED` the server reports `server_type: "ee"` (QGIS plugin and mobile app enable workspace features only for it).
+2. **Telemetry**: with `ENTERPRISE_ENABLED` statistics are never sent to Mergin Maps (`COLLECT_STATISTICS` forced off).
+3. **Package name**: `mergin_plus`, neutral with respect to the commercial product.
+4. **Fork extras (M7)**: kept, but scheduled last.
+5. **Web maps basemap default**: OpenStreetMap, configurable.
+6. **Branch workflow / upstream sync**: still open (one commit per milestone step for now).
+
+## 6. Progress
+
+- [x] M0 — package skeleton, `ENTERPRISE_ENABLED`, alembic `enterprise` branch, CE suite in EE mode (`TEST_ENTERPRISE=1`, CE-only tests marked `global_workspace`), CI matrix. Frontend `ee-lib` still to do.
+- [ ] M1 — backend core done (db workspaces, roles, create/update/close/purge, usage, CE global workspace migration); frontend (switcher, manage workspaces, settings) still to do.

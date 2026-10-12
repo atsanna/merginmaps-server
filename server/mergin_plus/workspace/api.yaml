@@ -1,0 +1,171 @@
+openapi: 3.0.0
+info:
+  description: Workspace management API (open source reimplementation of Enterprise features)
+  version: "0.1"
+  title: Mergin workspaces
+servers:
+  - url: /
+tags:
+  - name: workspace
+    description: Workspace management
+paths:
+  /v1/workspace:
+    post:
+      tags:
+        - workspace
+      summary: Create new workspace, the session user becomes its owner
+      operationId: mergin_plus.workspace.controller.create_workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  example: my-workspace
+                description:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: Created workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/workspace/{id}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    patch:
+      tags:
+        - workspace
+      summary: Update workspace description, name can not be changed
+      operationId: mergin_plus.workspace.controller.update_workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Updated workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags:
+        - workspace
+      summary: Close workspace, it is permanently removed together with its projects after expiration period
+      operationId: mergin_plus.workspace.controller.close_workspace
+      responses:
+        "204":
+          description: Workspace closed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/workspace/{id}/usage:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags:
+        - workspace
+      summary: Workspace usage and limits
+      operationId: mergin_plus.workspace.controller.workspace_usage
+      responses:
+        "200":
+          description: Workspace usage
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  storage:
+                    type: integer
+                    description: Storage limit in bytes
+                  disk_usage:
+                    type: integer
+                    description: Storage used in bytes
+                  project_count:
+                    type: integer
+                  members_count:
+                    type: integer
+                  contributors_count:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  parameters:
+    WorkspaceId:
+      name: id
+      in: path
+      description: Workspace id
+      required: true
+      schema:
+        type: integer
+  responses:
+    BadRequest:
+      description: Invalid request
+    Unauthorized:
+      description: Authentication information is missing or invalid
+    Forbidden:
+      description: Access is denied
+    NotFound:
+      description: Workspace not found
+    Conflict:
+      description: Workspace already exists
+  schemas:
+    Workspace:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: my-workspace
+        description:
+          type: string
+          nullable: true
+        project_count:
+          type: integer
+        disk_usage:
+          type: integer
+        storage:
+          type: integer
+        role:
+          type: string
+          nullable: true
+          example: owner
