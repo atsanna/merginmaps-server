@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-12",
   "stats": {
-    "tests": 58,
+    "tests": 67,
     "endpoints": 20
   },
   "available": [
@@ -60,6 +60,10 @@
     {
       "it": "Registro attività e webhook firmati per workspace (API)",
       "en": "Audit log and signed per-workspace webhooks (API)"
+    },
+    {
+      "it": "Single sign-on SAML/OIDC tramite Ory Polis, compatibile con plugin QGIS e app mobile",
+      "en": "SAML/OIDC single sign-on through Ory Polis, compatible with QGIS plugin and mobile app"
     }
   ],
   "phases": [
@@ -363,26 +367,26 @@
       "steps": [
         {
           "n": "15",
-          "status": "wip",
+          "status": "done",
           "title": {
             "it": "Integrazione Ory Polis",
             "en": "Ory Polis integration"
           },
           "desc": {
-            "it": "Ponte SAML/OIDC open source, instradamento per dominio email, account creati al primo accesso.",
-            "en": "Open-source SAML/OIDC bridge, routing by e-mail domain, accounts created on first login."
+            "it": "Ponte SAML/OIDC open source, identity provider scelto dal dominio email, account creati al primo accesso, codici monouso e PKCE.",
+            "en": "Open-source SAML/OIDC bridge, identity provider chosen by e-mail domain, accounts created on first login, one-time codes and PKCE."
           }
         },
         {
           "n": "16",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Accesso SSO nei client",
             "en": "SSO login in clients"
           },
           "desc": {
-            "it": "Pulsante nella dashboard e flusso per plugin QGIS e app mobile.",
-            "en": "Dashboard button and flow for QGIS plugin and mobile app."
+            "it": "Flusso OAuth2 compatibile con plugin QGIS e app mobile, accesso dalla dashboard pronto lato server; manca il pulsante nella pagina di login.",
+            "en": "OAuth2 flow compatible with QGIS plugin and mobile app, dashboard sign-in ready on the server; login page button still missing."
           }
         }
       ]

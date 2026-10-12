@@ -33,6 +33,14 @@ celery -A mergin_plus.wsgi.celery beat
 | `WEBHOOKS_ALLOW_PRIVATE_URLS` | `false` | Allow webhooks to private / loopback addresses |
 | `WEBHOOKS_TIMEOUT` | `10` | Webhook request timeout (seconds) |
 | `WEBHOOKS_MAX_FAILURES` | `20` | Consecutive failed deliveries disabling a webhook |
+| `SSO_ENABLED` | `false` | Enable single sign-on |
+| `SSO_SERVER_URL` | | Public URL of Ory Polis |
+| `SSO_SERVER_API_URL` | `SSO_SERVER_URL` | Polis URL reachable from the server |
+| `SSO_SERVER_API_KEY` | | Polis API key (one of its `JACKSON_API_KEYS`) |
+| `SSO_SERVER_PRODUCT_ID` | `mergin-maps-product` | Polis product of the connections |
+| `SSO_SESSION_EXPIRATION` | `1209600` | Lifetime (seconds) of tokens issued after SSO login |
+| `SSO_TENANT_FLOW` | `multi` | `multi`: connection chosen by e-mail domain, `single`: `SSO_DEFAULT_TENANT` for everybody |
+| `SSO_ALLOWED_REDIRECT_URIS` | QGIS (`http://localhost:10042/` …) and mobile app | Client redirect URI prefixes, comma separated |
 | `INSTANCE_NAME` | | Server name shown in the dashboard (`DASHBOARD_LOGO_URL` from CE is exposed too) |
 
 With the add-on:
@@ -98,6 +106,21 @@ The add-on replaces the CE audit `NullSink`: every audit event (CE ones like `us
 `workspace.invitation.created`, `project.transfer_request.accepted`) is stored in `audit_log`.
 Events of a workspace are also POSTed to its matching webhooks as JSON, with headers `X-Webhook-Event`,
 `X-Webhook-Delivery` and `X-Webhook-Signature: sha256=<HMAC-SHA256 of the body with the webhook secret>`.
+
+## Single sign-on
+
+SSO connections (SAML or OIDC) are configured in [Ory Polis](https://github.com/ory/polis) (open source, Apache-2.0)
+with **tenant = e-mail domain** (e.g. `acme.com`) and **product = `SSO_SERVER_PRODUCT_ID`**; the allowed redirect URL
+of the connections is `<MERGIN_BASE_URL>/v2/sso/callback`. Users are created on their first SSO login (no password).
+
+| Endpoint | Description |
+|---|---|
+| `GET /v2/sso/config` | `tenant_flow_type` (`multi`/`single`) and `client_id` for single tenant |
+| `GET /v2/sso/connections?email=` | OAuth `id` (client id) for the e-mail domain, 404 without SSO connection |
+| `GET /v2/sso/authorize` | OAuth 2.0 authorization endpoint for clients (code flow, PKCE S256 required) |
+| `POST /v2/sso/token` | OAuth 2.0 token endpoint, returns a Mergin bearer token as `access_token` |
+| `GET /v2/sso/login?email=&next=` | Dashboard sign in (session cookie) |
+| `GET /v2/sso/callback` | Redirect target of Polis |
 
 ## Roles
 

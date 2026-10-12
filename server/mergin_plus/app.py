@@ -23,7 +23,13 @@ CE_MIGRATIONS_DIR = os.path.abspath(os.path.join(this_dir, os.pardir, "migration
 MIGRATIONS_DIR = CE_MIGRATIONS_DIR
 PLUS_VERSIONS_DIR = os.path.join(this_dir, "migrations")
 # config keys exposed to clients on /config in addition to CE ones
-PUBLIC_KEYS = ["USER_WORKSPACES_ALLOWED", "DASHBOARD_LOGO_URL", "INSTANCE_NAME"]
+PUBLIC_KEYS = [
+    "USER_WORKSPACES_ALLOWED",
+    "DASHBOARD_LOGO_URL",
+    "INSTANCE_NAME",
+    # QGIS plugin and mobile app offer SSO login when sso_enabled is true
+    "SSO_ENABLED",
+]
 
 
 def configure_migrations(app: Flask):
@@ -92,6 +98,13 @@ def register(app: Flask):
         )
         app.blueprints["/"].name = name
         app.blueprints[name] = app.blueprints.pop("/")
+
+    # single sign-on routes (plain Flask views: redirects and form encoded token endpoint)
+    from mergin.app import csrf
+    from .sso.views import bp as sso_bp
+
+    csrf.exempt(sso_bp)
+    app.register_blueprint(sso_bp)
 
     # e-mail templates
     app.register_blueprint(Blueprint("plus", __name__, template_folder="templates"))

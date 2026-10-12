@@ -291,3 +291,10 @@ class WorkspaceHandler(GlobalWorkspaceHandler):
             User.active.is_(True),
             or_(User.id.in_(member_editors), User.id.in_(project_editors)),
         ).count()
+
+    @staticmethod
+    def sso_connections_count() -> int:
+        """Number of SSO connections configured in Polis for this server"""
+        from ..sso.views import sso_connections_count
+
+        return sso_connections_count()

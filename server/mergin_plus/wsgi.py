@@ -17,6 +17,7 @@ from application import application, celery  # CE entry point
 from . import register
 from .audit.tasks import remove_old_audit_events
 from .webhooks import delivery  # noqa: F401 (registers webhook delivery task)
+from .sso.tasks import remove_expired_sso_grants
 from .transfer.tasks import remove_expired_transfers
 from .workspace.tasks import remove_closed_workspaces, remove_expired_invitations
 
@@ -44,4 +45,9 @@ def setup_plus_periodic_tasks(sender, **kwargs):
         crontab(hour=5, minute=0),
         remove_old_audit_events,
         name="remove old audit events",
+    )
+    sender.add_periodic_task(
+        crontab(minute=30),
+        remove_expired_sso_grants,
+        name="remove expired sso grants",
     )
