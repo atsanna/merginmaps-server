@@ -18,3 +18,7 @@ class Configuration(object):
     WORKSPACE_EXPIRATION = config("WORKSPACE_EXPIRATION", default=7, cast=int)
     # whether regular users can create workspaces, otherwise only superusers can
     USER_WORKSPACES_ALLOWED = config("USER_WORKSPACES_ALLOWED", default=True, cast=bool)
+    # days a workspace invitation is valid
+    WORKSPACE_INVITATION_EXPIRATION = config(
+        "WORKSPACE_INVITATION_EXPIRATION", default=14, cast=int
+    )

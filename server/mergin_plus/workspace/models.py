@@ -2,12 +2,13 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
 from flask import current_app
 from sqlalchemy import func
-from sqlalchemy.dialects.postgresql import ENUM
+from sqlalchemy.dialects.postgresql import ENUM, UUID
 
 from mergin.app import db
 from mergin.auth.models import User
@@ -78,6 +79,7 @@ class Workspace(db.Model, AbstractWorkspace):
         for p in projects:
             p.delete(removed_by=self.removed_by)
         WorkspaceMember.query.filter_by(workspace_id=self.id).delete()
+        WorkspaceInvitation.query.filter_by(workspace_id=self.id).delete()
         self.name = f"{self.name}_{self.id}"
         self.active = False
         self.deleted = True
@@ -183,8 +185,16 @@ class Workspace(db.Model, AbstractWorkspace):
         return member
 
     def remove_member(self, user_id: int) -> None:
-        """Remove membership, does not commit"""
+        """Remove membership and direct access to workspace projects, does not commit"""
         WorkspaceMember.query.filter_by(workspace_id=self.id, user_id=user_id).delete()
+        self.reset_projects_roles(user_id)
+
+    def reset_projects_roles(self, user_id: int) -> None:
+        """Remove user direct access to workspace projects, does not commit"""
+        projects = db.session.query(Project.id).filter(Project.workspace_id == self.id)
+        ProjectUser.query.filter(
+            ProjectUser.user_id == user_id, ProjectUser.project_id.in_(projects)
+        ).delete(synchronize_session=False)
 
 
 class WorkspaceMember(db.Model):
@@ -211,3 +221,61 @@ class WorkspaceMember(db.Model):
 
     workspace = db.relationship("Workspace", back_populates="memberships")
     user = db.relationship("User")
+
+
+class WorkspaceInvitation(db.Model):
+    """Pending invitation of an email address to workspace with a role"""
+
+    __tablename__ = "workspace_invitation"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    uuid = db.Column(
+        UUID(as_uuid=True), nullable=False, unique=True, default=uuid.uuid4
+    )
+    workspace_id = db.Column(
+        db.Integer,
+        db.ForeignKey("workspace.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # stored lower-cased, matched case-insensitively with user emails
+    email = db.Column(db.String, nullable=False, index=True)
+    role = db.Column(
+        ENUM(*WorkspaceRole.values(), name="workspace_role", create_type=False),
+        nullable=False,
+    )
+    inviter_id = db.Column(
+        db.Integer, db.ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    created = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+
+    workspace = db.relationship("Workspace")
+    inviter = db.relationship("User")
+
+    __table_args__ = (db.UniqueConstraint("workspace_id", "email"),)
+
+    def __init__(self, workspace: Workspace, email: str, role: WorkspaceRole, inviter):
+        self.uuid = uuid.uuid4()
+        self.workspace_id = workspace.id
+        self.workspace = workspace
+        self.email = email.strip().lower()
+        self.role = role.value
+        self.inviter_id = inviter.id if inviter else None
+        self.created = datetime.utcnow()
+        self.renew()
+
+    def renew(self) -> None:
+        self.expires_at = datetime.utcnow() + timedelta(
+            days=current_app.config["WORKSPACE_INVITATION_EXPIRATION"]
+        )
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at < datetime.utcnow()
+
+    def accept(self, user: User) -> "WorkspaceMember":
+        """Make user workspace member, invitation is removed, does not commit"""
+        member = self.workspace.set_role(user.id, WorkspaceRole(self.role))
+        db.session.delete(self)
+        return member

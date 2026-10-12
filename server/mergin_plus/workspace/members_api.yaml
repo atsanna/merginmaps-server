@@ -1,0 +1,378 @@
+openapi: 3.0.0
+info:
+  description: Workspace members and invitations API (open source reimplementation of Enterprise features)
+  version: "0.1"
+  title: Mergin workspace members
+servers:
+  - url: /
+tags:
+  - name: members
+    description: Workspace members and invitations
+paths:
+  /v2/workspaces/{id}/members:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags:
+        - members
+      summary: List workspace members (admins)
+      operationId: mergin_plus.workspace.members_controller.list_members
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Member"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/workspaces/{id}/members/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/UserId"
+    get:
+      tags:
+        - members
+      summary: Workspace member detail (admins or the member)
+      operationId: mergin_plus.workspace.members_controller.get_member
+      responses:
+        "200":
+          description: Member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Member"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags:
+        - members
+      summary: Update member workspace role, optionally removing project specific roles
+      operationId: mergin_plus.workspace.members_controller.update_member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workspace_role:
+                  $ref: "#/components/schemas/MemberRole"
+                role:
+                  $ref: "#/components/schemas/MemberRole"
+                reset_projects_roles:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Updated member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Member"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags:
+        - members
+      summary: Remove member from workspace (admins), members can remove themselves
+      operationId: mergin_plus.workspace.members_controller.remove_member
+      responses:
+        "204":
+          description: Member removed
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/workspaces/{id}/invitations:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags:
+        - members
+      summary: List workspace invitations (admins)
+      operationId: mergin_plus.workspace.members_controller.list_invitations
+      responses:
+        "200":
+          description: Invitations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Invitation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags:
+        - members
+      summary: Invite email address to workspace (admins)
+      operationId: mergin_plus.workspace.members_controller.create_invitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - role
+              properties:
+                email:
+                  type: string
+                role:
+                  $ref: "#/components/schemas/MemberRole"
+      responses:
+        "201":
+          description: Invitation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invitation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v2/workspaces/{id}/invitations/{uuid}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/InvitationUuid"
+    delete:
+      tags:
+        - members
+      summary: Delete invitation (admins)
+      operationId: mergin_plus.workspace.members_controller.delete_invitation
+      responses:
+        "204":
+          description: Invitation deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/workspaces/{id}/invitations/{uuid}/resend:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/InvitationUuid"
+    post:
+      tags:
+        - members
+      summary: Renew invitation expiration and send it again (admins)
+      operationId: mergin_plus.workspace.members_controller.resend_invitation
+      responses:
+        "200":
+          description: Invitation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invitation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/invitations:
+    get:
+      tags:
+        - members
+      summary: Pending invitations of session user
+      operationId: mergin_plus.workspace.members_controller.user_invitations
+      responses:
+        "200":
+          description: Invitations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Invitation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v2/invitations/{uuid}/accept:
+    parameters:
+      - $ref: "#/components/parameters/InvitationUuid"
+    post:
+      tags:
+        - members
+      summary: Accept invitation, session user becomes workspace member
+      operationId: mergin_plus.workspace.members_controller.accept_invitation
+      responses:
+        "200":
+          description: Membership
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Member"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/invitations/{uuid}/decline:
+    parameters:
+      - $ref: "#/components/parameters/InvitationUuid"
+    post:
+      tags:
+        - members
+      summary: Decline invitation
+      operationId: mergin_plus.workspace.members_controller.decline_invitation
+      responses:
+        "204":
+          description: Invitation declined
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/invitations/{uuid}/register:
+    parameters:
+      - $ref: "#/components/parameters/InvitationUuid"
+    post:
+      tags:
+        - members
+      summary: Create account for invited email and accept invitation (no login required)
+      operationId: mergin_plus.workspace.members_controller.register_from_invitation
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - password
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                  format: password
+      responses:
+        "201":
+          description: Created user
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+components:
+  parameters:
+    WorkspaceId:
+      name: id
+      in: path
+      description: Workspace id
+      required: true
+      schema:
+        type: integer
+    UserId:
+      name: user_id
+      in: path
+      description: User id
+      required: true
+      schema:
+        type: integer
+    InvitationUuid:
+      name: uuid
+      in: path
+      description: Invitation uuid
+      required: true
+      schema:
+        type: string
+        format: uuid
+        pattern: '\b[0-9a-f]{8}\b-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-\b[0-9a-f]{12}\b'
+  responses:
+    BadRequest:
+      description: Invalid request
+    Unauthorized:
+      description: Authentication information is missing or invalid
+    Forbidden:
+      description: Access is denied
+    NotFound:
+      description: Not found
+    Conflict:
+      description: Conflict with existing state
+  schemas:
+    MemberRole:
+      type: string
+      enum:
+        - reader
+        - editor
+        - writer
+        - admin
+        - owner
+    Member:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+          nullable: true
+        workspace_role:
+          type: string
+        contributor:
+          type: boolean
+        last_signed_in:
+          type: string
+          nullable: true
+    Invitation:
+      type: object
+      properties:
+        uuid:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+        workspace_id:
+          type: integer
+        workspace:
+          type: string
+        inviter:
+          type: string
+          nullable: true
+        created:
+          type: string
+        expires_at:
+          type: string
+        expired:
+          type: boolean

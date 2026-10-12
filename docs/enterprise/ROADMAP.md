@@ -128,3 +128,4 @@ Defaults adopted while working locally (the repository could not be pushed); all
 
 - [x] M0 — package skeleton, `ENTERPRISE_ENABLED`, alembic `enterprise` branch, CE suite in EE mode (`TEST_ENTERPRISE=1`, CE-only tests marked `global_workspace`), CI matrix. Frontend `ee-lib` still to do.
 - [ ] M1 — backend core done (db workspaces, roles, create/update/close/purge, usage, CE global workspace migration); frontend (switcher, manage workspaces, settings) still to do.
+- [ ] M2 — backend done (members API, invitations with expiry/resend/accept/decline, registration from invitation, `POST /v2/users` membership, editor push rules, e-mail notifications to workspace admins); still to do: guest invitations with project list, sharing a project with a non-member e-mail, frontend (members tab, invitations).

@@ -4,7 +4,7 @@
 
 import os
 
-from flask import Flask
+from flask import Blueprint, Flask
 
 from .config import Configuration
 
@@ -29,6 +29,8 @@ def configure_migrations(app: Flask):
 def register(app: Flask):
     """Plug workspaces implementation into CE application"""
     from .workspace.handler import WorkspaceHandler
+    from .workspace.listeners import register_listeners
+    from .workspace.project_handler import ProjectHandler
 
     app.config.from_object(Configuration)
     # clients (QGIS plugin, mobile app) enable workspace features only for "ee" servers
@@ -36,6 +38,7 @@ def register(app: Flask):
     # this fork must never report itself to Mergin Maps as an Enterprise Edition installation
     app.config["COLLECT_STATISTICS"] = False
     app.ws_handler = WorkspaceHandler()
+    app.project_handler = ProjectHandler()
 
     app.connexion_app.add_api(
         os.path.join(this_dir, "workspace", "api.yaml"),
@@ -45,5 +48,18 @@ def register(app: Flask):
     )
     app.blueprints["/"].name = "plus_workspace"
     app.blueprints["plus_workspace"] = app.blueprints.pop("/")
+
+    app.connexion_app.add_api(
+        os.path.join(this_dir, "workspace", "members_api.yaml"),
+        base_path="/",
+        options={"swagger_ui": False, "serve_spec": False},
+        validate_responses=True,
+    )
+    app.blueprints["/"].name = "plus_members"
+    app.blueprints["plus_members"] = app.blueprints.pop("/")
+
+    # e-mail templates
+    app.register_blueprint(Blueprint("plus", __name__, template_folder="templates"))
+    register_listeners()
 
     configure_migrations(app)

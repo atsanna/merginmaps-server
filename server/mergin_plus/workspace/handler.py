@@ -19,7 +19,7 @@ from mergin.sync.models import (
 )
 from mergin.sync.permissions import ProjectPermissions, projects_query
 from mergin.sync.workspace import GlobalWorkspaceHandler
-from .models import Workspace, WorkspaceMember
+from .models import Workspace, WorkspaceInvitation, WorkspaceMember
 
 
 class WorkspaceHandler(GlobalWorkspaceHandler):
@@ -110,9 +110,18 @@ class WorkspaceHandler(GlobalWorkspaceHandler):
             key=lambda ws: (roles.index(ws.get_user_role(user).name), -ws.id),
         )
 
-    def list_user_invitations(self, user) -> list:
-        # invitations are added in a later milestone
-        return []
+    def list_user_invitations(self, user) -> List[WorkspaceInvitation]:
+        """Pending (not expired) invitations for user email"""
+        return (
+            WorkspaceInvitation.query.join(Workspace)
+            .filter(
+                WorkspaceInvitation.email == user.email.lower(),
+                WorkspaceInvitation.expires_at > datetime.utcnow(),
+                Workspace.removed_at.is_(None),
+            )
+            .order_by(WorkspaceInvitation.created.desc())
+            .all()
+        )
 
     def filter_projects(
         self,

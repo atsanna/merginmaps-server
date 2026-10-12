@@ -1,0 +1,13 @@
+<!--
+Copyright (C) 2026 merginmaps-server contributors
+
+SPDX-License-Identifier: AGPL-3.0-only
+-->
+
+{% extends "email/components/content.html" %}
+{% block html %}
+  <p>Hello,</p> <br>
+  <p>User <b>{{ inviter }}</b> has invited you to join the workspace <b>{{ workspace }}</b> as <b>{{ role }}</b>.
+  The invitation will expire on {{ expire.strftime('%Y-%m-%d %H:%M') }}. You can accept it <a href="{{ link }}">here</a>.
+  </p>
+{% endblock %}

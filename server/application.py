@@ -106,10 +106,18 @@ def setup_periodic_tasks(sender, **kwargs):
         name="clean up of outdated chunks",
     )
     if PlusConfiguration.ENTERPRISE_ENABLED:
-        from mergin_plus.workspace.tasks import remove_closed_workspaces
+        from mergin_plus.workspace.tasks import (
+            remove_closed_workspaces,
+            remove_expired_invitations,
+        )
 
         sender.add_periodic_task(
             crontab(hour=4, minute=0),
             remove_closed_workspaces,
             name="remove closed workspaces",
+        )
+        sender.add_periodic_task(
+            crontab(hour=4, minute=30),
+            remove_expired_invitations,
+            name="remove expired workspace invitations",
         )
