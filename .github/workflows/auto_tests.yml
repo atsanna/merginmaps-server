@@ -17,7 +17,7 @@ jobs:
       matrix:
         include:
           - suite: server
-            pytest_args: "-v -n auto --cov=mergin --cov-report=lcov mergin/tests"
+            pytest_args: "-v -n auto --cov=mergin --cov-report=term mergin/tests"
           - suite: migration
             pytest_args: "-v mergin/test_migrations"
 
@@ -58,9 +58,3 @@ jobs:
           cd server
           pipenv run pytest ${{ matrix.pytest_args }}
 
-      - name: Coveralls
-        if: matrix.suite == 'server'
-        uses: coverallsapp/github-action@v2
-        with:
-          base-path: server
-          format: lcov

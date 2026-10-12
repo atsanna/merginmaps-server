@@ -9,9 +9,8 @@
 
 <p align="center">
   <a href="https://github.com/MerginMaps/server/tree/master/LICENSES"><img src="https://img.shields.io/badge/License-Dual%20AGPL3%20and%20MM%20Commercial%20licence-A6CBF4"></a>
-  <a href="https://github.com/MerginMaps/server/actions/workflows/code_style.yml"><img src="https://github.com/MerginMaps/server/actions/workflows/code_style.yml/badge.svg"></a>
-  <a href="https://github.com/MerginMaps/server/actions/workflows/auto_tests.yml"><img src="https://github.com/MerginMaps/server/actions/workflows/auto_tests.yml/badge.svg"></a>
-  <a href="https://coveralls.io/github/MerginMaps/mergin"><img src="https://coveralls.io/repos/github/MerginMaps/mergin/badge.svg"></a>
+  <a href="https://github.com/atsanna/merginmaps-server/actions/workflows/code_style.yml"><img src="https://github.com/atsanna/merginmaps-server/actions/workflows/code_style.yml/badge.svg"></a>
+  <a href="https://github.com/atsanna/merginmaps-server/actions/workflows/auto_tests.yml"><img src="https://github.com/atsanna/merginmaps-server/actions/workflows/auto_tests.yml/badge.svg"></a>
 </p>
 
 > [!NOTE]
