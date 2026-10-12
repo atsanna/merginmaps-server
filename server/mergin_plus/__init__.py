@@ -7,4 +7,9 @@ Not affiliated with, sponsored or endorsed by Mergin Maps / Lutra Consulting.
 Plugs into the Community Edition application through its extension points.
 """
 
-from .app import register
+
+def register(app):
+    """Plug the add-on into a CE Flask application (see mergin_plus.app.register)"""
+    from .app import register as _register
+
+    return _register(app)

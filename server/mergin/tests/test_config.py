@@ -3,10 +3,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
 
 
-import pytest
-
-
-@pytest.mark.global_workspace
 def test_config(client, monkeypatch):
     """Test response of app public config"""
     resp = client.get("/config")

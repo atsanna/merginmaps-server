@@ -2,21 +2,32 @@
 
 Open source reimplementation of features of the Mergin Maps Enterprise Edition, written from public documentation only (see [docs/enterprise](../../docs/enterprise)). Not affiliated with, sponsored or endorsed by Mergin Maps / Lutra Consulting.
 
-The package plugs into the Community Edition application through its extension points:
-it replaces `application.ws_handler` with workspaces stored in database, adds its own API and an alembic `enterprise` migration branch.
-Without `ENTERPRISE_ENABLED` nothing is loaded and the server behaves exactly as Community Edition.
+It is an **add-on**: Community Edition files are never modified, so the fork can keep following upstream releases.
+The add-on plugs into the CE application only through its extension points (`application.ws_handler` /
+`application.project_handler`, extra Connexion APIs and blueprints, blinker signals, alembic version locations),
+see [app.py](app.py). Its alembic migrations live in [migrations](migrations) and form the `enterprise` branch.
+
+## Running
+
+The add-on has its own entry point, which loads the unmodified CE `application.py` and registers the add-on.
+Use it in place of the CE one; with the CE entry point the server is plain Community Edition.
+
+```bash
+gunicorn mergin_plus.wsgi:application
+celery -A mergin_plus.wsgi.celery worker
+celery -A mergin_plus.wsgi.celery beat
+```
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENTERPRISE_ENABLED` | `false` | Enable the package |
 | `WORKSPACE_STORAGE_SIZE` | `GLOBAL_STORAGE` | Storage quota (bytes) of new workspaces |
 | `WORKSPACE_EXPIRATION` | `7` | Days a closed workspace is kept before permanent removal |
 | `USER_WORKSPACES_ALLOWED` | `true` | Regular users can create workspaces (otherwise superusers only) |
 | `WORKSPACE_INVITATION_EXPIRATION` | `14` | Days a workspace invitation is valid |
 
-With the package enabled:
+With the add-on:
 - `/config` reports `server_type: "ee"`, which QGIS plugin and mobile app need to show workspace features;
 - usage statistics are never sent to Mergin Maps (`COLLECT_STATISTICS` is forced off).
 
@@ -25,10 +36,11 @@ With the package enabled:
 Upgrade both branches (community first):
 
 ```bash
-ENTERPRISE_ENABLED=1 flask db upgrade community@head
-ENTERPRISE_ENABLED=1 flask db upgrade enterprise@head
+export FLASK_APP=mergin_plus.wsgi
+flask db upgrade community@head
+flask db upgrade enterprise@head
 # or simply
-ENTERPRISE_ENABLED=1 flask db upgrade heads
+flask db upgrade heads
 ```
 
 On an existing Community Edition database the global workspace (`GLOBAL_WORKSPACE`, id 1) becomes a regular workspace with `GLOBAL_STORAGE` quota; superusers become its owners and, depending on `GLOBAL_ADMIN` / `GLOBAL_WRITE` / `GLOBAL_READ`, all active users become admins / writers / readers.
@@ -62,5 +74,5 @@ On an existing Community Edition database the global workspace (`GLOBAL_WORKSPAC
 ```bash
 pytest mergin_plus/tests                       # package tests
 pytest mergin_plus/test_migrations             # enterprise migration branch
-TEST_ENTERPRISE=1 pytest mergin/tests          # CE suite on db workspaces
+python -m pytest -p mergin_plus.ce_suite mergin/tests   # unmodified CE suite on the add-on
 ```

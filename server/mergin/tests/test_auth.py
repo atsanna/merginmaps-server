@@ -1071,7 +1071,6 @@ def test_update_user_profile(client):
     assert resp.status_code == 403
 
 
-@pytest.mark.global_workspace
 def test_search_user(client):
     user = User.query.filter_by(username="mergin").first()
 

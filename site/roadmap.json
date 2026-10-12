@@ -5,7 +5,7 @@
     "endpoints": 20
   },
   "available": [
-    {"it": "Workspace multipli salvati nel database, attivabili con ENTERPRISE_ENABLED", "en": "Multiple workspaces stored in the database, enabled with ENTERPRISE_ENABLED"},
+    {"it": "Workspace multipli salvati nel database", "en": "Multiple workspaces stored in the database"},
     {"it": "Ruoli guest, reader, editor, writer, admin e owner, con permessi per progetto", "en": "Guest, reader, editor, writer, admin and owner roles, with per-project permissions"},
     {"it": "Creazione, modifica e chiusura dei workspace, con eliminazione definitiva dopo la scadenza", "en": "Create, update and close workspaces, permanently removed after expiration"},
     {"it": "Quota di spazio per singolo workspace e riepilogo d'uso", "en": "Per-workspace storage quota and usage summary"},
@@ -22,9 +22,9 @@
       "title": {"it": "Fondamenta", "en": "Foundations"},
       "desc": {"it": "Il pacchetto che si aggancia alla Community, le migrazioni e i test.", "en": "The package plugging into Community Edition, migrations and tests."},
       "steps": [
-        {"n": "F1", "status": "done", "title": {"it": "Pacchetto mergin_plus", "en": "mergin_plus package"}, "desc": {"it": "Si attiva con ENTERPRISE_ENABLED; senza, il server resta esattamente la Community.", "en": "Enabled with ENTERPRISE_ENABLED; without it the server is exactly Community Edition."}},
-        {"n": "F2", "status": "done", "title": {"it": "Ramo di migrazioni enterprise", "en": "Enterprise migration branch"}, "desc": {"it": "Tabelle proprie in un ramo Alembic separato, sopra quello Community.", "en": "Own tables in a separate Alembic branch on top of the community one."}},
-        {"n": "F3", "status": "done", "title": {"it": "Test e CI", "en": "Tests and CI"}, "desc": {"it": "La suite Community gira anche in modalità Enterprise, con job dedicati nella CI.", "en": "The Community test suite also runs in Enterprise mode, with dedicated CI jobs."}},
+        {"n": "F1", "status": "done", "title": {"it": "Add-on mergin_plus", "en": "mergin_plus add-on"}, "desc": {"it": "Nessun file della Community viene modificato: l'add-on ha un suo punto di avvio e si aggancia solo ai punti di estensione, così seguire le nuove versioni Community resta semplice.", "en": "No Community file is modified: the add-on has its own entry point and uses extension points only, so following new Community releases stays easy."}},
+        {"n": "F2", "status": "done", "title": {"it": "Ramo di migrazioni enterprise", "en": "Enterprise migration branch"}, "desc": {"it": "Tabelle proprie in un ramo Alembic separato, dentro l'add-on.", "en": "Own tables in a separate Alembic branch, inside the add-on."}},
+        {"n": "F3", "status": "done", "title": {"it": "Test e CI", "en": "Tests and CI"}, "desc": {"it": "La suite Community, senza modifiche, gira anche sopra l'add-on, con job dedicati nella CI.", "en": "The unmodified Community test suite also runs on top of the add-on, with dedicated CI jobs."}},
         {"n": "F4", "status": "todo", "title": {"it": "Pacchetto frontend", "en": "Frontend package"}, "desc": {"it": "Viste e componenti che riempiono gli slot già previsti nella web app.", "en": "Views and components filling the slots already provided by the web app."}}
       ]
     },

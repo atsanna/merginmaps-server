@@ -8,8 +8,6 @@ from mergin.config import Configuration as MainConfiguration
 
 
 class Configuration(object):
-    # switch for the whole package, without it the server runs as plain Community Edition
-    ENTERPRISE_ENABLED = config("ENTERPRISE_ENABLED", default=False, cast=bool)
     # default storage quota (bytes) of newly created workspaces
     WORKSPACE_STORAGE_SIZE = config(
         "WORKSPACE_STORAGE_SIZE", default=MainConfiguration.GLOBAL_STORAGE, cast=int

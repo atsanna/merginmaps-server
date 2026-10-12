@@ -31,8 +31,6 @@ from ..sync.files import files_changes_from_upload
 
 thisdir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(os.path.join(thisdir, os.pardir))
-# run CE test suite against workspaces stored in db (mergin_plus package)
-TEST_ENTERPRISE = os.environ.get("TEST_ENTERPRISE", "0") == "1"
 
 
 @pytest.fixture(scope="session")
@@ -54,10 +52,6 @@ def session_app():
     application.config["TEST_DIR"] = os.path.join(thisdir, "test_projects")
     application.config["SERVER_NAME"] = "localhost.localdomain"
     application.config["SERVER_TYPE"] = "ce"
-    if TEST_ENTERPRISE:
-        from mergin_plus import register as register_plus
-
-        register_plus(application)
     application.config["SERVICE_ID"] = str(uuid.uuid4())
 
     with application.app_context():
@@ -93,17 +87,7 @@ def flask_app(session_app):
 def app(flask_app, request):
     """Flask app with testing objects created"""
     with flask_app.app_context():
-        if TEST_ENTERPRISE:
-            from mergin_plus.tests.conftest import create_global_workspace
-
-            ws = create_global_workspace()
         initialize()
-        if TEST_ENTERPRISE:
-            from ..auth.models import User
-            from ..sync.interfaces import WorkspaceRole
-
-            admin = User.query.filter_by(is_admin=True).first()
-            ws.set_role(admin.id, WorkspaceRole.OWNER)
         info = MerginInfo(service_id=current_app.config["SERVICE_ID"])
         db.session.add(info)
         db.session.commit()
@@ -289,13 +273,3 @@ def diff_project(app):
 @pytest.fixture()
 def runner(app):
     return app.test_cli_runner()
-
-
-def pytest_collection_modifyitems(config, items):
-    """Skip tests bound to CE global workspace settings when running with enterprise features"""
-    if not TEST_ENTERPRISE:
-        return
-    skip = pytest.mark.skip(reason="relies on CE global workspace settings")
-    for item in items:
-        if "global_workspace" in item.keywords:
-            item.add_marker(skip)

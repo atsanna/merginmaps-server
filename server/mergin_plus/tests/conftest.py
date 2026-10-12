@@ -23,7 +23,7 @@ from mergin.tests.utils import (
     login_as_admin,
 )
 from mergin_plus import register as register_plus
-from mergin_plus.workspace.models import Workspace
+from mergin_plus.testing import create_global_workspace
 
 # reuse CE function scoped fixtures, they depend on the session app defined below
 from mergin.tests.fixtures import flask_app  # noqa: F401
@@ -65,21 +65,6 @@ def session_app():
         db.drop_all()
         db.engine.dispose()
     remove_events()
-
-
-def create_global_workspace() -> Workspace:
-    """Workspace matching CE global one (id 1) used by CE test helpers"""
-    ws = Workspace(
-        name=test_workspace_name, storage=current_app.config["GLOBAL_STORAGE"]
-    )
-    ws.id = test_workspace_id
-    db.session.add(ws)
-    db.session.flush()
-    db.session.execute(
-        text("SELECT setval('workspace_id_seq', (SELECT max(id) FROM workspace))")
-    )
-    db.session.commit()
-    return ws
 
 
 @pytest.fixture(scope="function")

@@ -38,9 +38,9 @@ Out of scope: mandatory telemetry, SaaS billing/subscriptions, Mergin-hosted bas
   - registers its own Connexion API specs (`/v1/workspace*`, `/v2/workspaces/*`, `/app/...` private endpoints, admin endpoints);
   - plugs into CE signals (`project_access_granted`, `push_finished`, `project_version_created`, `user_created`, `user_account_closed`…) for e-mails, maps, audit, webhooks;
   - adds Celery tasks to the existing beat schedule (expired invitations/transfers, closed workspace purge, overview generation).
-- Activation: `ENTERPRISE_ENABLED=true` in `server/application.py`; with it off, the package is not loaded and the server is pure CE.
+- Add-on: CE files are never modified. The add-on has its own entry point `mergin_plus.wsgi` wrapping the unmodified CE `application.py`; with the CE entry point the server is pure CE. Add-on migrations live in `server/mergin_plus/migrations` (alembic `enterprise` branch).
 - Database: Alembic **`enterprise` branch** on top of `community` (already supported by `alembic.ini` `version_locations`). First migration creates `workspace` for every existing `project.workspace_id` (the global workspace id=1 becomes a real row), then adds the FK.
-- Minimal, upstream-friendly patches to CE only where a hook is missing (each one listed in the PR and kept small so upstream merges stay easy).
+- No patches to CE: when a hook is missing, wrap CE objects from the add-on (as done for `/config` and for CE test helpers) instead of editing CE files.
 
 ### Frontend
 
@@ -57,7 +57,7 @@ Out of scope: mandatory telemetry, SaaS billing/subscriptions, Mergin-hosted bas
 Ordered by dependency; each milestone is one or more PRs, merged only with green CI.
 
 ### M0 — Foundations
-- Package skeleton, `ENTERPRISE_ENABLED` flag, app-extension registration, `enterprise` Alembic branch (empty head), test fixtures running the suite in both CE and EE modes, `ee-lib` frontend package wired into the shells.
+- Package skeleton, add-on entry point, app-extension registration, `enterprise` Alembic branch (empty head), test fixtures running the suite in both CE and EE modes, `ee-lib` frontend package wired into the shells.
 - CI: run `auto_tests` twice (CE mode, EE mode) + migration test for the `enterprise` branch.
 - **Done when**: CE tests green in both modes; `flask db upgrade enterprise@head` works on a fresh and on an existing CE DB.
 
@@ -117,8 +117,8 @@ Ordered by dependency; each milestone is one or more PRs, merged only with green
 
 Defaults adopted while working locally (the repository could not be pushed); all can be revisited.
 
-1. **Edition flag**: with `ENTERPRISE_ENABLED` the server reports `server_type: "ee"` (QGIS plugin and mobile app enable workspace features only for it).
-2. **Telemetry**: with `ENTERPRISE_ENABLED` statistics are never sent to Mergin Maps (`COLLECT_STATISTICS` forced off).
+1. **Edition flag**: with the add-on the server reports `server_type: "ee"` (QGIS plugin and mobile app enable workspace features only for it).
+2. **Telemetry**: with the add-on statistics are never sent to Mergin Maps (`COLLECT_STATISTICS` forced off).
 3. **Package name**: `mergin_plus`, neutral with respect to the commercial product.
 4. **Fork extras (M7)**: kept, but scheduled last.
 5. **Web maps basemap default**: OpenStreetMap, configurable.
@@ -126,6 +126,6 @@ Defaults adopted while working locally (the repository could not be pushed); all
 
 ## 6. Progress
 
-- [x] M0 — package skeleton, `ENTERPRISE_ENABLED`, alembic `enterprise` branch, CE suite in EE mode (`TEST_ENTERPRISE=1`, CE-only tests marked `global_workspace`), CI matrix. Frontend `ee-lib` still to do.
+- [x] M0 — add-on package with its own entry point (`mergin_plus.wsgi`), no CE file modified, alembic `enterprise` branch inside the add-on, unmodified CE suite run on the add-on (`-p mergin_plus.ce_suite`), CI matrix, roadmap page on GitHub Pages. Frontend `ee-lib` still to do.
 - [ ] M1 — backend core done (db workspaces, roles, create/update/close/purge, usage, CE global workspace migration); frontend (switcher, manage workspaces, settings) still to do.
 - [ ] M2 — backend done (members API, invitations with expiry/resend/accept/decline, registration from invitation, `POST /v2/users` membership, editor push rules, e-mail notifications to workspace admins); still to do: guest invitations with project list, sharing a project with a non-member e-mail, frontend (members tab, invitations).

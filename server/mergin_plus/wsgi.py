@@ -1,0 +1,34 @@
+# Copyright (C) 2026 merginmaps-server contributors
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Entry point of the server with enterprise features.
+
+It loads the unmodified Community Edition entry point (server/application.py) and plugs the add-on into it.
+Use it instead of the CE one:
+
+    gunicorn mergin_plus.wsgi:application
+    celery -A mergin_plus.wsgi.celery worker / beat
+    FLASK_APP=mergin_plus.wsgi flask db upgrade heads
+"""
+
+from celery.schedules import crontab
+
+from application import application, celery  # CE entry point
+from . import register
+from .workspace.tasks import remove_closed_workspaces, remove_expired_invitations
+
+register(application)
+
+
+@celery.on_after_finalize.connect
+def setup_plus_periodic_tasks(sender, **kwargs):
+    sender.add_periodic_task(
+        crontab(hour=4, minute=0),
+        remove_closed_workspaces,
+        name="remove closed workspaces",
+    )
+    sender.add_periodic_task(
+        crontab(hour=4, minute=30),
+        remove_expired_invitations,
+        name="remove expired workspace invitations",
+    )

@@ -1,7 +1,6 @@
 # Copyright (C) Lutra Consulting Limited
 #
 # SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-MerginMaps-Commercial
-import pytest
 import datetime
 import os
 
@@ -99,7 +98,6 @@ def test_workspace_implementation(client, monkeypatch):
     assert handler.monthly_contributors_count() == 2
 
 
-@pytest.mark.global_workspace
 def test_workspace(client, monkeypatch):
     """Test get global workspace"""
     resp = client.get("/v1/workspaces")
