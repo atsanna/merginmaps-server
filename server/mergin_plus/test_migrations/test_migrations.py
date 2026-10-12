@@ -23,6 +23,8 @@ def migration_app(migration_engine):
         "mergin.sync.models",
         "mergin_plus.workspace.models",
         "mergin_plus.transfer.models",
+        "mergin_plus.audit.models",
+        "mergin_plus.webhooks.models",
     ):
         importlib.import_module(module_path)
 

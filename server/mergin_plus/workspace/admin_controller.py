@@ -9,6 +9,7 @@ from sqlalchemy import func
 
 from mergin.app import db
 from mergin.auth import auth_required
+from ..events import PlusEventType, emit_event
 from .controller import workspace_name_validation
 from .members_controller import member_to_dict
 from .models import Workspace
@@ -99,6 +100,7 @@ def create_workspace():
     )
     db.session.add(ws)
     db.session.commit()
+    emit_event(PlusEventType.WORKSPACE_CREATED, ws)
     return admin_workspace_to_dict(ws), 201
 
 
@@ -120,6 +122,7 @@ def update_workspace(id: int):
         if key in data:
             setattr(ws, key, data[key])
     db.session.commit()
+    emit_event(PlusEventType.WORKSPACE_UPDATED, ws, changes=data)
     return admin_workspace_to_dict(ws), 200
 
 
@@ -130,6 +133,7 @@ def delete_workspace(id: int):
     if not ws.removed_at:
         ws.close(removed_by=current_user.id)
         db.session.commit()
+        emit_event(PlusEventType.WORKSPACE_CLOSED, ws)
     return admin_workspace_to_dict(ws), 200
 
 
@@ -147,4 +151,5 @@ def restore_workspace(id: int):
     ws.removed_at = None
     ws.removed_by = None
     db.session.commit()
+    emit_event(PlusEventType.WORKSPACE_RESTORED, ws)
     return admin_workspace_to_dict(ws), 200

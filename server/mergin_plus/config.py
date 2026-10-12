@@ -28,3 +28,16 @@ class Configuration(object):
     PROJECT_TRANSFER_EXPIRATION = config(
         "PROJECT_TRANSFER_EXPIRATION", default=7, cast=int
     )
+    # store audit events in database
+    AUDIT_LOG_ENABLED = config("AUDIT_LOG_ENABLED", default=True, cast=bool)
+    # days audit events are kept
+    AUDIT_LOG_RETENTION = config("AUDIT_LOG_RETENTION", default=365, cast=int)
+    # webhooks may target private / loopback addresses (only for trusted setups)
+    WEBHOOKS_ALLOW_PRIVATE_URLS = config(
+        "WEBHOOKS_ALLOW_PRIVATE_URLS", default=False, cast=bool
+    )
+    WEBHOOKS_TIMEOUT = config("WEBHOOKS_TIMEOUT", default=10, cast=int)
+    # webhook is disabled after this number of consecutive failed deliveries
+    WEBHOOKS_MAX_FAILURES = config("WEBHOOKS_MAX_FAILURES", default=20, cast=int)
+    # name of this server shown in the dashboard (branding)
+    INSTANCE_NAME = config("INSTANCE_NAME", default="")

@@ -17,6 +17,7 @@ from mergin.sync.utils import (
     has_valid_first_character,
     is_reserved_word,
 )
+from ..events import PlusEventType, emit_event
 from .models import Workspace
 
 
@@ -72,6 +73,7 @@ def create_workspace():
     db.session.flush()
     ws.set_role(current_user.id, WorkspaceRole.OWNER)
     db.session.commit()
+    emit_event(PlusEventType.WORKSPACE_CREATED, ws)
     return _dump(ws), 201
 
 
@@ -86,6 +88,7 @@ def update_workspace(id: int):
     if "description" in request.json:
         ws.description = request.json["description"]
     db.session.commit()
+    emit_event(PlusEventType.WORKSPACE_UPDATED, ws)
     return _dump(ws), 200
 
 
@@ -97,6 +100,7 @@ def close_workspace(id: int):
         abort(403, "You do not have permissions for this workspace")
     ws.close(removed_by=current_user.id)
     db.session.commit()
+    emit_event(PlusEventType.WORKSPACE_CLOSED, ws)
     return "", 204
 
 

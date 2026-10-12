@@ -23,7 +23,7 @@ CE_MIGRATIONS_DIR = os.path.abspath(os.path.join(this_dir, os.pardir, "migration
 MIGRATIONS_DIR = CE_MIGRATIONS_DIR
 PLUS_VERSIONS_DIR = os.path.join(this_dir, "migrations")
 # config keys exposed to clients on /config in addition to CE ones
-PUBLIC_KEYS = ["USER_WORKSPACES_ALLOWED"]
+PUBLIC_KEYS = ["USER_WORKSPACES_ALLOWED", "DASHBOARD_LOGO_URL", "INSTANCE_NAME"]
 
 
 def configure_migrations(app: Flask):
@@ -57,6 +57,7 @@ def extend_public_config(app: Flask):
 def register(app: Flask):
     """Plug enterprise features into CE application"""
     from mergin.stats.config import Configuration as StatsConfiguration
+    from .audit.sink import AuditSink
     from .transfer import models as transfer_models  # noqa: F401 (tables)
     from .workspace.handler import WorkspaceHandler
     from .workspace.limits import (
@@ -81,6 +82,7 @@ def register(app: Flask):
         ("plus_members", "workspace/members_api.yaml"),
         ("plus_admin", "workspace/admin_api.yaml"),
         ("plus_transfer", "transfer/api.yaml"),
+        ("plus_audit", "audit/api.yaml"),
     ):
         app.connexion_app.add_api(
             os.path.join(this_dir, spec),
@@ -95,6 +97,8 @@ def register(app: Flask):
     app.register_blueprint(Blueprint("plus", __name__, template_folder="templates"))
     register_listeners()
     register_limits_events()
+    # store audit events and forward them to webhooks (CE default is NullSink)
+    app.extensions["audit"]["sink"] = AuditSink()
     app.register_error_handler(ContributorsLimitHit, handle_limit_hit)
     extend_public_config(app)
     configure_migrations(app)

@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-12",
   "stats": {
-    "tests": 51,
+    "tests": 58,
     "endpoints": 20
   },
   "available": [
@@ -56,6 +56,10 @@
     {
       "it": "Trasferimento dei progetti tra workspace (API)",
       "en": "Project transfer between workspaces (API)"
+    },
+    {
+      "it": "Registro attività e webhook firmati per workspace (API)",
+      "en": "Audit log and signed per-workspace webhooks (API)"
     }
   ],
   "phases": [
@@ -447,38 +451,38 @@
       "steps": [
         {
           "n": "20",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Registro attività",
             "en": "Audit log"
           },
           "desc": {
-            "it": "Eventi salvati, consultabili da admin e workspace.",
-            "en": "Stored events, browsable by admins and workspaces."
+            "it": "Eventi della Community e dell'add-on salvati nel database, con conservazione configurabile; API per admin e workspace pronte, manca l'interfaccia.",
+            "en": "Community and add-on events stored in the database with configurable retention; admin and workspace APIs ready, UI still missing."
           }
         },
         {
           "n": "21",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Webhook",
             "en": "Webhooks"
           },
           "desc": {
-            "it": "Notifiche firmate verso servizi esterni.",
-            "en": "Signed notifications to external services."
+            "it": "Webhook per workspace firmati HMAC-SHA256, filtri per tipo di evento, retry, blocco degli indirizzi interni; manca l'interfaccia.",
+            "en": "Per-workspace webhooks signed with HMAC-SHA256, event type filters, retries, internal addresses blocked; UI still missing."
           }
         },
         {
           "n": "22",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Personalizzazione grafica",
             "en": "Branding"
           },
           "desc": {
-            "it": "Logo e nome dell'istanza nella dashboard.",
-            "en": "Instance logo and name in the dashboard."
+            "it": "Nome e logo dell'istanza esposti ai client (INSTANCE_NAME, DASHBOARD_LOGO_URL); manca l'uso nella dashboard.",
+            "en": "Instance name and logo exposed to clients (INSTANCE_NAME, DASHBOARD_LOGO_URL); dashboard usage still missing."
           }
         },
         {

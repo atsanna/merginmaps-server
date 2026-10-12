@@ -1,0 +1,322 @@
+openapi: 3.0.0
+info:
+  description: Audit log and webhooks (open source add-on)
+  version: "0.1"
+  title: Mergin audit log and webhooks
+servers:
+  - url: /
+tags:
+  - name: audit
+    description: Audit log
+  - name: webhooks
+    description: Workspace webhooks
+paths:
+  /app/admin/audit:
+    get:
+      tags:
+        - audit
+      summary: Audit events of the server (superusers)
+      operationId: mergin_plus.audit.controller.server_audit_log
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: workspace_id
+          in: query
+          schema:
+            type: integer
+        - $ref: "#/components/parameters/EventType"
+        - $ref: "#/components/parameters/ProjectFilter"
+        - $ref: "#/components/parameters/ActorFilter"
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+      responses:
+        "200":
+          $ref: "#/components/responses/AuditPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v2/workspaces/{id}/audit:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags:
+        - audit
+      summary: Audit events of workspace (workspace admins)
+      operationId: mergin_plus.audit.controller.workspace_audit_log
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/EventType"
+        - $ref: "#/components/parameters/ProjectFilter"
+        - $ref: "#/components/parameters/ActorFilter"
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+      responses:
+        "200":
+          $ref: "#/components/responses/AuditPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/workspaces/{id}/webhooks:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags:
+        - webhooks
+      summary: Workspace webhooks (workspace admins)
+      operationId: mergin_plus.webhooks.controller.list_webhooks
+      responses:
+        "200":
+          description: Webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Webhook"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags:
+        - webhooks
+      summary: Create webhook, the signing secret is returned only in this response
+      operationId: mergin_plus.webhooks.controller.create_webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+              properties:
+                url:
+                  type: string
+                events:
+                  description: Event type prefixes, all events when empty
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "201":
+          description: Webhook with secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/workspaces/{id}/webhooks/{webhook_id}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/WebhookId"
+    patch:
+      tags:
+        - webhooks
+      summary: Update webhook url, events, active flag or regenerate its secret
+      operationId: mergin_plus.webhooks.controller.update_webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                events:
+                  type: array
+                  items:
+                    type: string
+                active:
+                  type: boolean
+                regenerate_secret:
+                  type: boolean
+      responses:
+        "200":
+          description: Webhook
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags:
+        - webhooks
+      summary: Delete webhook
+      operationId: mergin_plus.webhooks.controller.delete_webhook
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/workspaces/{id}/webhooks/{webhook_id}/ping:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/WebhookId"
+    post:
+      tags:
+        - webhooks
+      summary: Send a test event and report the result
+      operationId: mergin_plus.webhooks.controller.ping_webhook
+      responses:
+        "200":
+          description: Delivery result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  status:
+                    type: integer
+                    nullable: true
+                  error:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  parameters:
+    WorkspaceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+    WebhookId:
+      name: webhook_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PerPage:
+      name: per_page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 100
+    EventType:
+      name: event_type
+      in: query
+      description: Event type or prefix, e.g. "project.member"
+      schema:
+        type: string
+    ProjectFilter:
+      name: project_id
+      in: query
+      schema:
+        type: string
+        format: uuid
+    ActorFilter:
+      name: actor_id
+      in: query
+      schema:
+        type: integer
+    Since:
+      name: since
+      in: query
+      description: ISO date-time (inclusive)
+      schema:
+        type: string
+    Until:
+      name: until
+      in: query
+      description: ISO date-time (exclusive)
+      schema:
+        type: string
+  responses:
+    AuditPage:
+      description: Page of audit events, newest first
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              items:
+                type: array
+                items:
+                  type: object
+              count:
+                type: integer
+    BadRequest:
+      description: Invalid request
+    Unauthorized:
+      description: Authentication information is missing or invalid
+    Forbidden:
+      description: Access is denied
+    NotFound:
+      description: Not found
+  schemas:
+    Webhook:
+      type: object
+      properties:
+        id:
+          type: integer
+        workspace_id:
+          type: integer
+        url:
+          type: string
+        events:
+          type: array
+          items:
+            type: string
+        active:
+          type: boolean
+        secret:
+          type: string
+        created:
+          type: string
+        last_delivery_at:
+          type: string
+          nullable: true
+        last_status:
+          type: integer
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
+        failures:
+          type: integer

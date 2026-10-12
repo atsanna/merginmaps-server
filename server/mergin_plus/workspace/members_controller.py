@@ -15,6 +15,7 @@ from mergin.auth.models import User
 from mergin.celery import send_email_async
 from mergin.sync.interfaces import WorkspaceRole
 from mergin.sync.models import Project, ProjectRole
+from ..events import PlusEventType, emit_event
 from .limits import (
     check_can_add_contributor,
     invitation_adds_contributor,
@@ -156,6 +157,13 @@ def update_member(id: int, user_id: int):
     if request.json.get("reset_projects_roles"):
         ws.reset_projects_roles(user_id)
     db.session.commit()
+    emit_event(
+        PlusEventType.WORKSPACE_MEMBER_UPDATED,
+        ws,
+        target_user_id=user_id,
+        old_role=current_role.value,
+        new_role=role.value,
+    )
     return member_to_dict(member.user, role), 200
 
 
@@ -174,6 +182,7 @@ def remove_member(id: int, user_id: int):
         abort(400, "Workspace must have at least one owner")
     ws.remove_member(user_id)
     db.session.commit()
+    emit_event(PlusEventType.WORKSPACE_MEMBER_REMOVED, ws, target_user_id=user_id)
     return "", 204
 
 
@@ -219,6 +228,13 @@ def _invite(ws: Workspace, email: str, role: WorkspaceRole, projects: list):
             inv.add_project(item["id"], item["role"])
         inv.renew()
     db.session.commit()
+    emit_event(
+        PlusEventType.WORKSPACE_INVITATION_CREATED,
+        ws,
+        target_email=email,
+        role=inv.role,
+        projects=inv.projects,
+    )
     send_invitation_email(inv)
     return inv, created
 
@@ -309,6 +325,7 @@ def delete_invitation(id: int, uuid: str):
     _check_can_grant(ws, WorkspaceRole(inv.role))
     db.session.delete(inv)
     db.session.commit()
+    emit_event(PlusEventType.WORKSPACE_INVITATION_DELETED, ws, target_email=inv.email)
     return "", 204
 
 
@@ -345,8 +362,15 @@ def user_invitations():
 def accept_invitation(uuid: str):
     inv = _get_user_invitation(uuid)
     ws = inv.workspace
+    inv_role = inv.role
     inv.accept(current_user)
     db.session.commit()
+    emit_event(
+        PlusEventType.WORKSPACE_INVITATION_ACCEPTED,
+        ws,
+        target_user_id=current_user.id,
+        role=inv_role,
+    )
     member = ws.get_member(current_user.id)
     role = WorkspaceRole(member.role) if member else WorkspaceRole.GUEST
     return member_to_dict(current_user, role), 200
@@ -357,6 +381,11 @@ def decline_invitation(uuid: str):
     inv = _get_user_invitation(uuid)
     db.session.delete(inv)
     db.session.commit()
+    emit_event(
+        PlusEventType.WORKSPACE_INVITATION_DECLINED,
+        inv.workspace,
+        target_user_id=current_user.id,
+    )
     return "", 204
 
 

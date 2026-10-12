@@ -22,6 +22,8 @@ from mergin.sync.forms import project_name_validation
 from mergin.sync.models import Project
 from mergin.sync.permissions import ProjectPermissions, require_project_by_uuid
 from mergin.sync.interfaces import WorkspaceRole
+from mergin.sync.events import SyncEventType
+from ..events import emit_event
 from .models import ProjectTransfer
 
 
@@ -55,6 +57,20 @@ def _notify_target_admins(transfer: ProjectTransfer) -> None:
         )
 
 
+def _emit(event_type, transfer: ProjectTransfer, **kwargs) -> None:
+    """Emitted for both workspaces, so both see it in their audit log and webhooks"""
+    for ws in (transfer.from_workspace, transfer.to_workspace):
+        emit_event(
+            event_type,
+            ws,
+            target_project_id=transfer.project_id,
+            project_name=transfer.project.name,
+            from_workspace=transfer.from_workspace.name,
+            to_workspace=transfer.to_workspace.name,
+            **kwargs,
+        )
+
+
 def _pending(transfer_id) -> ProjectTransfer:
     transfer = db.session.get(ProjectTransfer, transfer_id)
     if not transfer or transfer.is_expired or transfer.project.removed_at:
@@ -77,6 +93,7 @@ def request_transfer(id: str):
     transfer = ProjectTransfer(project, target, current_user)
     db.session.add(transfer)
     db.session.commit()
+    _emit(SyncEventType.PROJECT_TRANSFER_REQUEST_INITIATED, transfer)
     _notify_target_admins(transfer)
     return transfer.to_dict(), 201
 
@@ -129,6 +146,7 @@ def accept_transfer(id: str):
     if usage + project.disk_usage > target.storage:
         return StorageLimitHit(usage, target.storage).response(422)
 
+    _emit(SyncEventType.PROJECT_TRANSFER_REQUEST_ACCEPTED, transfer, new_name=name)
     project.workspace_id = target.id
     project.name = name
     db.session.delete(transfer)
@@ -144,6 +162,14 @@ def decline_transfer(id: str):
     can_cancel = ProjectPermissions.Delete.check(transfer.project, current_user)
     if not (can_decline or can_cancel):
         abort(403, "You do not have permissions for this transfer")
+    _emit(
+        (
+            SyncEventType.PROJECT_TRANSFER_REQUEST_REJECTED
+            if can_decline
+            else SyncEventType.PROJECT_TRANSFER_REQUEST_CANCELED
+        ),
+        transfer,
+    )
     db.session.delete(transfer)
     db.session.commit()
     return "", 204

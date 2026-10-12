@@ -28,6 +28,12 @@ celery -A mergin_plus.wsgi.celery beat
 | `WORKSPACE_INVITATION_EXPIRATION` | `14` | Days a workspace invitation is valid |
 | `WORKSPACE_CONTRIBUTORS_LIMIT` | `0` | Maximum contributors of new workspaces (`0` = unlimited) |
 | `PROJECT_TRANSFER_EXPIRATION` | `7` | Days a project transfer request is valid |
+| `AUDIT_LOG_ENABLED` | `true` | Store audit events in database |
+| `AUDIT_LOG_RETENTION` | `365` | Days audit events are kept |
+| `WEBHOOKS_ALLOW_PRIVATE_URLS` | `false` | Allow webhooks to private / loopback addresses |
+| `WEBHOOKS_TIMEOUT` | `10` | Webhook request timeout (seconds) |
+| `WEBHOOKS_MAX_FAILURES` | `20` | Consecutive failed deliveries disabling a webhook |
+| `INSTANCE_NAME` | | Server name shown in the dashboard (`DASHBOARD_LOGO_URL` from CE is exposed too) |
 
 With the add-on:
 - `/config` reports `server_type: "ee"`, which QGIS plugin and mobile app need to show workspace features;
@@ -71,6 +77,11 @@ On an existing Community Edition database the global workspace (`GLOBAL_WORKSPAC
 | `GET /v2/workspaces/{id}/transfers` | Incoming and outgoing transfers (admin) |
 | `POST /v2/transfers/{id}/accept` | Target workspace admin moves the project, optional new `name`; checks name clash and storage |
 | `DELETE /v2/transfers/{id}` | Decline (target admins) or cancel (source side) |
+| `GET /app/admin/audit` | Superuser: audit events (filters `event_type` prefix, `workspace_id`, `project_id`, `actor_id`, `since`, `until`) |
+| `GET /v2/workspaces/{id}/audit` | Workspace admins: audit events of the workspace |
+| `GET/POST /v2/workspaces/{id}/webhooks` | Workspace admins: list / create webhook (`url`, `events` prefixes), secret returned on creation |
+| `PATCH/DELETE /v2/workspaces/{id}/webhooks/{webhook_id}` | Update `url` / `events` / `active` / `regenerate_secret`, delete |
+| `POST /v2/workspaces/{id}/webhooks/{webhook_id}/ping` | Send a test event |
 
 ## Limits
 
@@ -79,6 +90,14 @@ On an existing Community Edition database the global workspace (`GLOBAL_WORKSPAC
   direct access to workspace projects. The contributors limit is checked on every database flush,
   so it also covers CE endpoints (project collaborators, access requests); requests adding a contributor
   over the limit get `422 ContributorsLimitHit`. Changes not adding contributors are always allowed.
+
+## Audit log and webhooks
+
+The add-on replaces the CE audit `NullSink`: every audit event (CE ones like `user.login.succeeded`,
+`project.version.created`, `project.member.added`, and add-on ones like `workspace.member.updated`,
+`workspace.invitation.created`, `project.transfer_request.accepted`) is stored in `audit_log`.
+Events of a workspace are also POSTed to its matching webhooks as JSON, with headers `X-Webhook-Event`,
+`X-Webhook-Delivery` and `X-Webhook-Signature: sha256=<HMAC-SHA256 of the body with the webhook secret>`.
 
 ## Roles
 
