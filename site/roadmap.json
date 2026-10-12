@@ -121,7 +121,7 @@
         },
         {
           "n": "F4",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Pacchetto frontend",
             "en": "Frontend package"
