@@ -405,7 +405,7 @@
       "steps": [
         {
           "n": "17",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Elaborazione delle versioni",
             "en": "Version processing"
