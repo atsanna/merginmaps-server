@@ -15,6 +15,8 @@
 
 > [!NOTE]
 > **About this fork**  
+> 🗺️ **[Roadmap: status and next steps →](https://atsanna.github.io/merginmaps-server/roadmap-en.html)** · [Italiano](https://atsanna.github.io/merginmaps-server/roadmap.html)
+>
 > This repository is a community fork of [MerginMaps/server](https://github.com/MerginMaps/server) (Community Edition, AGPL-3.0), developed together with [Claude Code](https://claude.com/claude-code).
 > Its goal is to bring the features of the Mergin Maps Enterprise Edition to the open-source server, implemented independently from public documentation — no proprietary Enterprise code is used.
 >

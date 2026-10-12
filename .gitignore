@@ -46,3 +46,4 @@ server/.dev.env
 
 # chiavi locali, non pubblicare
 server/mergin/.env
+site/_build/

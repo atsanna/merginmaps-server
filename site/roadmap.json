@@ -1,0 +1,110 @@
+{
+  "updated": "2026-10-13",
+  "stats": {
+    "tests": 43,
+    "endpoints": 20
+  },
+  "available": [
+    {"it": "Workspace multipli salvati nel database, attivabili con ENTERPRISE_ENABLED", "en": "Multiple workspaces stored in the database, enabled with ENTERPRISE_ENABLED"},
+    {"it": "Ruoli guest, reader, editor, writer, admin e owner, con permessi per progetto", "en": "Guest, reader, editor, writer, admin and owner roles, with per-project permissions"},
+    {"it": "Creazione, modifica e chiusura dei workspace, con eliminazione definitiva dopo la scadenza", "en": "Create, update and close workspaces, permanently removed after expiration"},
+    {"it": "Quota di spazio per singolo workspace e riepilogo d'uso", "en": "Per-workspace storage quota and usage summary"},
+    {"it": "Gestione dei membri: elenco, cambio ruolo, rimozione, uscita", "en": "Member management: list, role change, removal, leaving"},
+    {"it": "Inviti via email con scadenza, reinvio, accettazione e rifiuto", "en": "E-mail invitations with expiry, resend, accept and decline"},
+    {"it": "Registrazione dal link d'invito anche con la registrazione libera disattivata", "en": "Sign-up from an invitation link even with self-registration disabled"},
+    {"it": "Ruolo editor: modifica dei dati senza toccare la struttura del progetto QGIS", "en": "Editor role: data edits without touching the QGIS project structure"},
+    {"it": "Migrazione automatica di un server Community esistente", "en": "Automatic migration of an existing Community server"},
+    {"it": "API compatibili con il plugin QGIS, l'app mobile e il client Python", "en": "APIs compatible with the QGIS plugin, mobile app and Python client"}
+  ],
+  "phases": [
+    {
+      "id": "M0", "cls": "p0",
+      "title": {"it": "Fondamenta", "en": "Foundations"},
+      "desc": {"it": "Il pacchetto che si aggancia alla Community, le migrazioni e i test.", "en": "The package plugging into Community Edition, migrations and tests."},
+      "steps": [
+        {"n": "F1", "status": "done", "title": {"it": "Pacchetto mergin_plus", "en": "mergin_plus package"}, "desc": {"it": "Si attiva con ENTERPRISE_ENABLED; senza, il server resta esattamente la Community.", "en": "Enabled with ENTERPRISE_ENABLED; without it the server is exactly Community Edition."}},
+        {"n": "F2", "status": "done", "title": {"it": "Ramo di migrazioni enterprise", "en": "Enterprise migration branch"}, "desc": {"it": "Tabelle proprie in un ramo Alembic separato, sopra quello Community.", "en": "Own tables in a separate Alembic branch on top of the community one."}},
+        {"n": "F3", "status": "done", "title": {"it": "Test e CI", "en": "Tests and CI"}, "desc": {"it": "La suite Community gira anche in modalità Enterprise, con job dedicati nella CI.", "en": "The Community test suite also runs in Enterprise mode, with dedicated CI jobs."}},
+        {"n": "F4", "status": "todo", "title": {"it": "Pacchetto frontend", "en": "Frontend package"}, "desc": {"it": "Viste e componenti che riempiono gli slot già previsti nella web app.", "en": "Views and components filling the slots already provided by the web app."}}
+      ]
+    },
+    {
+      "id": "M1", "cls": "p1",
+      "title": {"it": "Workspace", "en": "Workspaces"},
+      "desc": {"it": "Più workspace per server, ognuno con i suoi progetti e membri.", "en": "Many workspaces per server, each with its own projects and members."},
+      "steps": [
+        {"n": "1", "status": "done", "title": {"it": "Workspace nel database", "en": "Workspaces in the database"}, "desc": {"it": "Nome immutabile, descrizione, quota, ruoli e ospiti.", "en": "Immutable name, description, quota, roles and guests."}},
+        {"n": "2", "status": "done", "title": {"it": "API dei workspace", "en": "Workspace API"}, "desc": {"it": "Crea, modifica, chiudi, uso; USER_WORKSPACES_ALLOWED.", "en": "Create, update, close, usage; USER_WORKSPACES_ALLOWED."}},
+        {"n": "3", "status": "done", "title": {"it": "Migrazione dal workspace globale", "en": "Global workspace migration"}, "desc": {"it": "Il workspace unico della Community diventa un workspace normale con i suoi membri.", "en": "The single Community workspace becomes a regular workspace with its members."}},
+        {"n": "4", "status": "todo", "title": {"it": "Selettore e gestione workspace", "en": "Workspace switcher and management"}, "desc": {"it": "Selettore nell'intestazione e pagina «Gestisci workspace» nella dashboard.", "en": "Header switcher and «Manage workspaces» page in the dashboard."}},
+        {"n": "5", "status": "todo", "title": {"it": "Impostazioni del workspace", "en": "Workspace settings"}, "desc": {"it": "Descrizione e chiusura con conferma, dalla dashboard.", "en": "Description and close with confirmation, from the dashboard."}}
+      ]
+    },
+    {
+      "id": "M2", "cls": "p1",
+      "title": {"it": "Membri e inviti", "en": "Members and invitations"},
+      "desc": {"it": "Chi entra in un workspace e con quale ruolo.", "en": "Who joins a workspace and with which role."},
+      "steps": [
+        {"n": "6", "status": "done", "title": {"it": "API dei membri", "en": "Members API"}, "desc": {"it": "Elenco, dettaglio, cambio ruolo, rimozione; solo gli owner gestiscono gli owner.", "en": "List, detail, role change, removal; only owners manage owners."}},
+        {"n": "7", "status": "done", "title": {"it": "Inviti via email", "en": "E-mail invitations"}, "desc": {"it": "Scadenza, reinvio, revoca, accettazione e rifiuto; pulizia automatica.", "en": "Expiry, resend, revoke, accept and decline; automatic cleanup."}},
+        {"n": "8", "status": "done", "title": {"it": "Registrazione da invito", "en": "Sign-up from invitation"}, "desc": {"it": "Account creato dal link, con email già verificata.", "en": "Account created from the link, with e-mail already verified."}},
+        {"n": "9", "status": "done", "title": {"it": "Ruolo editor", "en": "Editor role"}, "desc": {"it": "Push dei soli dati: niente file QGIS né mergin-config.json, GeoPackage solo con diff.", "en": "Data-only pushes: no QGIS files or mergin-config.json, GeoPackages only via diffs."}},
+        {"n": "10", "status": "todo", "title": {"it": "Ospiti e condivisione esterna", "en": "Guests and external sharing"}, "desc": {"it": "Inviti come ospite su progetti scelti; condivisione con email non ancora membri.", "en": "Guest invitations to selected projects; sharing with e-mails not yet members."}},
+        {"n": "11", "status": "todo", "title": {"it": "Scheda Membri e inviti", "en": "Members and invitations tab"}, "desc": {"it": "Tabella dei membri, inviti in sospeso, notifiche nell'intestazione.", "en": "Members table, pending invitations, header notifications."}}
+      ]
+    },
+    {
+      "id": "M3", "cls": "p2",
+      "title": {"it": "Quote e amministrazione", "en": "Quotas and administration"},
+      "desc": {"it": "Limiti per workspace e strumenti per l'amministratore del server.", "en": "Per-workspace limits and tools for the server administrator."},
+      "steps": [
+        {"n": "12", "status": "wip", "title": {"it": "Quote per workspace", "en": "Per-workspace quotas"}, "desc": {"it": "Spazio per workspace già attivo; manca il limite di contributori.", "en": "Per-workspace storage already enforced; contributor limit still missing."}},
+        {"n": "13", "status": "todo", "title": {"it": "Scheda Workspace nell'admin", "en": "Admin Workspaces tab"}, "desc": {"it": "Elenco, dettaglio, limiti, attiva/disattiva, crea ed elimina.", "en": "List, detail, limits, activate/deactivate, create and delete."}}
+      ]
+    },
+    {
+      "id": "M4", "cls": "p2",
+      "title": {"it": "Trasferimento dei progetti", "en": "Project transfer"},
+      "desc": {"it": "Spostare un progetto da un workspace a un altro.", "en": "Moving a project between workspaces."},
+      "steps": [
+        {"n": "14", "status": "todo", "title": {"it": "Richiesta e accettazione", "en": "Request and acceptance"}, "desc": {"it": "Richiesta con scadenza, accettazione dal workspace di destinazione, notifiche.", "en": "Request with expiry, acceptance by the target workspace, notifications."}}
+      ]
+    },
+    {
+      "id": "M5", "cls": "p2",
+      "title": {"it": "Single sign-on", "en": "Single sign-on"},
+      "desc": {"it": "Accesso con il provider aziendale, SAML o OIDC.", "en": "Login with the company identity provider, SAML or OIDC."},
+      "steps": [
+        {"n": "15", "status": "todo", "title": {"it": "Integrazione Ory Polis", "en": "Ory Polis integration"}, "desc": {"it": "Ponte SAML/OIDC open source, instradamento per dominio email, account creati al primo accesso.", "en": "Open-source SAML/OIDC bridge, routing by e-mail domain, accounts created on first login."}},
+        {"n": "16", "status": "todo", "title": {"it": "Accesso SSO nei client", "en": "SSO login in clients"}, "desc": {"it": "Pulsante nella dashboard e flusso per plugin QGIS e app mobile.", "en": "Dashboard button and flow for QGIS plugin and mobile app."}}
+      ]
+    },
+    {
+      "id": "M6", "cls": "p3",
+      "title": {"it": "Mappe web", "en": "Web maps"},
+      "desc": {"it": "Il progetto visto su una mappa nel browser.", "en": "The project shown on a map in the browser."},
+      "steps": [
+        {"n": "17", "status": "todo", "title": {"it": "Elaborazione delle versioni", "en": "Version processing"}, "desc": {"it": "Worker che legge il progetto QGIS e prepara layer, legende e temi.", "en": "Worker reading the QGIS project and preparing layers, legends and themes."}},
+        {"n": "18", "status": "todo", "title": {"it": "QGIS Server", "en": "QGIS Server"}, "desc": {"it": "Servizio WMS/WMTS con controllo dei permessi.", "en": "WMS/WMTS service with permission checks."}},
+        {"n": "19", "status": "todo", "title": {"it": "Scheda Mappa", "en": "Map tab"}, "desc": {"it": "OpenLayers con layer, legenda, temi, mappa di base OpenStreetMap e scheda attributi.", "en": "OpenLayers with layers, legend, themes, OpenStreetMap basemap and attribute form."}}
+      ]
+    },
+    {
+      "id": "M7", "cls": "p3",
+      "title": {"it": "Extra", "en": "Extras"},
+      "desc": {"it": "Funzioni oltre a quelle documentate dell'Enterprise Edition.", "en": "Features beyond the documented Enterprise Edition."},
+      "steps": [
+        {"n": "20", "status": "todo", "title": {"it": "Registro attività", "en": "Audit log"}, "desc": {"it": "Eventi salvati, consultabili da admin e workspace.", "en": "Stored events, browsable by admins and workspaces."}},
+        {"n": "21", "status": "todo", "title": {"it": "Webhook", "en": "Webhooks"}, "desc": {"it": "Notifiche firmate verso servizi esterni.", "en": "Signed notifications to external services."}},
+        {"n": "22", "status": "todo", "title": {"it": "Personalizzazione grafica", "en": "Branding"}, "desc": {"it": "Logo e nome dell'istanza nella dashboard.", "en": "Instance logo and name in the dashboard."}},
+        {"n": "23", "status": "todo", "title": {"it": "Mappe condivise e OGC API", "en": "Shared maps and OGC API"}, "desc": {"it": "Link pubblici, incorporamento, servizi OGC (opzionale).", "en": "Public links, embedding, OGC services (optional)."}}
+      ]
+    }
+  ],
+  "out_of_scope": [
+    {"it": "Telemetria obbligatoria verso Mergin Maps: questo fork non invia statistiche", "en": "Mandatory telemetry to Mergin Maps: this fork sends no statistics"},
+    {"it": "Abbonamenti, fatturazione e piani del servizio cloud", "en": "Subscriptions, billing and cloud service plans"},
+    {"it": "Mappe di base ospitate da Mergin Maps", "en": "Basemaps hosted by Mergin Maps"},
+    {"it": "Codice o immagini proprietarie dell'Enterprise Edition", "en": "Proprietary Enterprise Edition code or images"}
+  ]
+}
