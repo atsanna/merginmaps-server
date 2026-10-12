@@ -120,6 +120,9 @@ paths:
                     type: integer
                   contributors_count:
                     type: integer
+                  contributors_limit:
+                    type: integer
+                    nullable: true
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":

@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-12",
   "stats": {
-    "tests": 46,
+    "tests": 49,
     "endpoints": 20
   },
   "available": [
@@ -48,6 +48,10 @@
     {
       "it": "Inviti come ospite su progetti scelti e condivisione di un progetto con qualsiasi email",
       "en": "Guest invitations to selected projects and project sharing with any e-mail"
+    },
+    {
+      "it": "Limite di contributori per workspace e API di amministrazione dei workspace",
+      "en": "Per-workspace contributors limit and workspace administration API"
     }
   ],
   "phases": [
@@ -287,26 +291,26 @@
       "steps": [
         {
           "n": "12",
-          "status": "wip",
+          "status": "done",
           "title": {
             "it": "Quote per workspace",
             "en": "Per-workspace quotas"
           },
           "desc": {
-            "it": "Spazio per workspace già attivo; manca il limite di contributori.",
-            "en": "Per-workspace storage already enforced; contributor limit still missing."
+            "it": "Spazio e numero massimo di contributori per workspace, applicati a ogni modo di assegnare un ruolo.",
+            "en": "Storage and maximum contributors per workspace, enforced for every way a role is granted."
           }
         },
         {
           "n": "13",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Scheda Workspace nell'admin",
             "en": "Admin Workspaces tab"
           },
           "desc": {
-            "it": "Elenco, dettaglio, limiti, attiva/disattiva, crea ed elimina.",
-            "en": "List, detail, limits, activate/deactivate, create and delete."
+            "it": "API pronta (elenco, dettaglio, limiti, attiva/disattiva, crea, elimina, ripristina); manca l'interfaccia.",
+            "en": "API ready (list, detail, limits, activate/deactivate, create, delete, restore); UI still missing."
           }
         }
       ]

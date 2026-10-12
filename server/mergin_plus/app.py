@@ -58,6 +58,11 @@ def register(app: Flask):
     """Plug enterprise features into CE application"""
     from mergin.stats.config import Configuration as StatsConfiguration
     from .workspace.handler import WorkspaceHandler
+    from .workspace.limits import (
+        ContributorsLimitHit,
+        handle_limit_hit,
+        register_events as register_limits_events,
+    )
     from .workspace.listeners import register_listeners
     from .workspace.project_handler import ProjectHandler
 
@@ -73,6 +78,7 @@ def register(app: Flask):
     for name, spec in (
         ("plus_workspace", "api.yaml"),
         ("plus_members", "members_api.yaml"),
+        ("plus_admin", "admin_api.yaml"),
     ):
         app.connexion_app.add_api(
             os.path.join(this_dir, "workspace", spec),
@@ -86,5 +92,7 @@ def register(app: Flask):
     # e-mail templates
     app.register_blueprint(Blueprint("plus", __name__, template_folder="templates"))
     register_listeners()
+    register_limits_events()
+    app.register_error_handler(ContributorsLimitHit, handle_limit_hit)
     extend_public_config(app)
     configure_migrations(app)

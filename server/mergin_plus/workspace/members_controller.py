@@ -15,6 +15,11 @@ from mergin.auth.models import User
 from mergin.celery import send_email_async
 from mergin.sync.interfaces import WorkspaceRole
 from mergin.sync.models import Project, ProjectRole
+from .limits import (
+    check_can_add_contributor,
+    invitation_adds_contributor,
+    pending_contributor_invitations,
+)
 from .models import Workspace, WorkspaceInvitation, WorkspaceMember
 
 # roles which can be granted through membership, guests are users with direct project access only
@@ -197,6 +202,8 @@ def _invite(ws: Workspace, email: str, role: WorkspaceRole, projects: list):
     Returns (invitation, created)
     """
     inv = WorkspaceInvitation.query.filter_by(workspace_id=ws.id, email=email).first()
+    if invitation_adds_contributor(role.value, projects):
+        check_can_add_contributor(ws, pending_contributor_invitations(ws))
     if inv and inv.is_expired:
         db.session.delete(inv)
         db.session.flush()

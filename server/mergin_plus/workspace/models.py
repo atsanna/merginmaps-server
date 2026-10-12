@@ -16,6 +16,14 @@ from mergin.sync.interfaces import AbstractWorkspace, WorkspaceRole
 from mergin.sync.models import Project, ProjectRole, ProjectUser
 
 
+CONTRIBUTOR_ROLES = [
+    WorkspaceRole.EDITOR.value,
+    WorkspaceRole.WRITER.value,
+    WorkspaceRole.ADMIN.value,
+    WorkspaceRole.OWNER.value,
+]
+
+
 class Workspace(db.Model, AbstractWorkspace):
     """Workspace stored in database, owner of projects and members"""
 
@@ -26,6 +34,8 @@ class Workspace(db.Model, AbstractWorkspace):
     name = db.Column(db.String, nullable=False)
     description = db.Column(db.String, nullable=True)
     storage = db.Column(db.BigInteger, nullable=False)
+    # maximum number of contributors (users who can change data), null means unlimited
+    contributors_limit = db.Column(db.Integer, nullable=True)
     active = db.Column(db.Boolean, nullable=False, default=True, index=True)
     created = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     # closed workspace waiting for permanent removal
@@ -44,9 +54,16 @@ class Workspace(db.Model, AbstractWorkspace):
         db.Index("ix_workspace_name_lower", func.lower(name), unique=True),
     )
 
-    def __init__(self, name: str, storage: int, description: str = None):
+    def __init__(
+        self,
+        name: str,
+        storage: int,
+        description: str = None,
+        contributors_limit: int = None,
+    ):
         self.name = name
         self.storage = storage
+        self.contributors_limit = contributors_limit
         self.description = description
         self.active = True
         self.deleted = False
@@ -165,6 +182,32 @@ class Workspace(db.Model, AbstractWorkspace):
             .all()
         )
         return [(user, WorkspaceRole(role)) for user, role in rows]
+
+    def contributors(self) -> set:
+        """Ids of active users who can change data: members with editor+ role
+        and users with editor+ direct access to workspace projects"""
+        members = db.session.query(WorkspaceMember.user_id).filter(
+            WorkspaceMember.workspace_id == self.id,
+            WorkspaceMember.role.in_(CONTRIBUTOR_ROLES),
+        )
+        project_users = (
+            db.session.query(ProjectUser.user_id)
+            .join(Project, Project.id == ProjectUser.project_id)
+            .filter(
+                Project.workspace_id == self.id,
+                Project.removed_at.is_(None),
+                ProjectUser.role != ProjectRole.READER.value,
+            )
+        )
+        rows = (
+            db.session.query(User.id)
+            .filter(
+                User.active.is_(True),
+                User.id.in_(members) | User.id.in_(project_users),
+            )
+            .all()
+        )
+        return {r.id for r in rows}
 
     def owners(self) -> List[User]:
         return [user for user, role in self.members() if role is WorkspaceRole.OWNER]

@@ -26,6 +26,7 @@ celery -A mergin_plus.wsgi.celery beat
 | `WORKSPACE_EXPIRATION` | `7` | Days a closed workspace is kept before permanent removal |
 | `USER_WORKSPACES_ALLOWED` | `true` | Regular users can create workspaces (otherwise superusers only) |
 | `WORKSPACE_INVITATION_EXPIRATION` | `14` | Days a workspace invitation is valid |
+| `WORKSPACE_CONTRIBUTORS_LIMIT` | `0` | Maximum contributors of new workspaces (`0` = unlimited) |
 
 With the add-on:
 - `/config` reports `server_type: "ee"`, which QGIS plugin and mobile app need to show workspace features;
@@ -62,6 +63,17 @@ On an existing Community Edition database the global workspace (`GLOBAL_WORKSPAC
 | `GET /v2/invitations`, `POST /v2/invitations/{uuid}/accept`, `.../decline` | Invitations of session user |
 | `POST /v2/invitations/{uuid}/register` | Create account from invitation link, works with `USER_SELF_REGISTRATION=false` |
 | `POST /v2/users` | CE endpoint, `workspace_id` and `role` now create the membership |
+| `GET/POST /app/admin/workspaces` | Superuser: list (paginated, `like`, `order_params`) / create workspace |
+| `GET/PATCH/DELETE /app/admin/workspaces/{id}` | Superuser: detail with members, update `storage` / `contributors_limit` / `active`, schedule removal |
+| `POST /app/admin/workspaces/{id}/restore` | Superuser: cancel scheduled removal |
+
+## Limits
+
+- Storage quota is per workspace (`WORKSPACE_STORAGE_SIZE` default, changed by superusers).
+- Contributors are users who can change data: members with editor or higher role and users with editor or higher
+  direct access to workspace projects. The contributors limit is checked on every database flush,
+  so it also covers CE endpoints (project collaborators, access requests); requests adding a contributor
+  over the limit get `422 ContributorsLimitHit`. Changes not adding contributors are always allowed.
 
 ## Roles
 

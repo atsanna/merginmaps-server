@@ -235,6 +235,7 @@ def test_workspace_usage(client):
         "project_count": 1,
         "members_count": 2,
         "contributors_count": 1,
+        "contributors_limit": None,
     }
 
 

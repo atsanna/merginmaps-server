@@ -66,6 +66,7 @@ def create_workspace():
         name=name,
         storage=current_app.config["WORKSPACE_STORAGE_SIZE"],
         description=request.json.get("description"),
+        contributors_limit=current_app.config["WORKSPACE_CONTRIBUTORS_LIMIT"] or None,
     )
     db.session.add(ws)
     db.session.flush()
@@ -111,8 +112,7 @@ def workspace_usage(id: int):
         "disk_usage": ws.disk_usage(),
         "project_count": ws.project_count(),
         "members_count": len(members),
-        "contributors_count": len(
-            [m for m, role in members if role >= WorkspaceRole.EDITOR]
-        ),
+        "contributors_count": len(ws.contributors()),
+        "contributors_limit": ws.contributors_limit,
     }
     return data, 200

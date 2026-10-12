@@ -1,0 +1,260 @@
+openapi: 3.0.0
+info:
+  description: Server administration of workspaces (open source reimplementation of Enterprise features)
+  version: "0.1"
+  title: Mergin workspaces administration
+servers:
+  - url: /
+tags:
+  - name: admin
+    description: Server administration
+paths:
+  /app/admin/workspaces:
+    get:
+      tags:
+        - admin
+      summary: Paginated list of workspaces
+      operationId: mergin_plus.workspace.admin_controller.list_workspaces
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: order_params
+          in: query
+          description: Comma separated sorting, e.g. "name ASC,created DESC"
+          schema:
+            type: string
+        - name: like
+          in: query
+          description: Filter by workspace name
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workspaces
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AdminWorkspace"
+                  count:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - admin
+      summary: Create workspace
+      operationId: mergin_plus.workspace.admin_controller.create_workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                  nullable: true
+                storage:
+                  type: integer
+                contributors_limit:
+                  type: integer
+                  nullable: true
+      responses:
+        "201":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminWorkspace"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /app/admin/workspaces/{id}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags:
+        - admin
+      summary: Workspace detail with members
+      operationId: mergin_plus.workspace.admin_controller.get_workspace
+      responses:
+        "200":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AdminWorkspace"
+                  - type: object
+                    properties:
+                      members:
+                        type: array
+                        items:
+                          type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags:
+        - admin
+      summary: Update workspace limits, description or active flag
+      operationId: mergin_plus.workspace.admin_controller.update_workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                storage:
+                  type: integer
+                contributors_limit:
+                  type: integer
+                  nullable: true
+                description:
+                  type: string
+                  nullable: true
+                active:
+                  type: boolean
+      responses:
+        "200":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminWorkspace"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags:
+        - admin
+      summary: Schedule workspace removal
+      operationId: mergin_plus.workspace.admin_controller.delete_workspace
+      responses:
+        "200":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminWorkspace"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /app/admin/workspaces/{id}/restore:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    post:
+      tags:
+        - admin
+      summary: Cancel scheduled removal of a closed workspace
+      operationId: mergin_plus.workspace.admin_controller.restore_workspace
+      responses:
+        "200":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminWorkspace"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+components:
+  parameters:
+    WorkspaceId:
+      name: id
+      in: path
+      description: Workspace id
+      required: true
+      schema:
+        type: integer
+  responses:
+    BadRequest:
+      description: Invalid request
+    Unauthorized:
+      description: Authentication information is missing or invalid
+    Forbidden:
+      description: Access is denied
+    NotFound:
+      description: Workspace not found
+    Conflict:
+      description: Workspace already exists
+  schemas:
+    AdminWorkspace:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+        storage:
+          type: integer
+        disk_usage:
+          type: integer
+        project_count:
+          type: integer
+        members_count:
+          type: integer
+        contributors_count:
+          type: integer
+        contributors_limit:
+          type: integer
+          nullable: true
+        created:
+          type: string
+        removed_at:
+          type: string
+          nullable: true
+        expiration:
+          type: string
+          nullable: true

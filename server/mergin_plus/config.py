@@ -20,3 +20,7 @@ class Configuration(object):
     WORKSPACE_INVITATION_EXPIRATION = config(
         "WORKSPACE_INVITATION_EXPIRATION", default=14, cast=int
     )
+    # default maximum of contributors of newly created workspaces, 0 means unlimited
+    WORKSPACE_CONTRIBUTORS_LIMIT = config(
+        "WORKSPACE_CONTRIBUTORS_LIMIT", default=0, cast=int
+    )
