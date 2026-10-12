@@ -57,6 +57,7 @@ def extend_public_config(app: Flask):
 def register(app: Flask):
     """Plug enterprise features into CE application"""
     from mergin.stats.config import Configuration as StatsConfiguration
+    from .transfer import models as transfer_models  # noqa: F401 (tables)
     from .workspace.handler import WorkspaceHandler
     from .workspace.limits import (
         ContributorsLimitHit,
@@ -76,12 +77,13 @@ def register(app: Flask):
     app.project_handler = ProjectHandler()
 
     for name, spec in (
-        ("plus_workspace", "api.yaml"),
-        ("plus_members", "members_api.yaml"),
-        ("plus_admin", "admin_api.yaml"),
+        ("plus_workspace", "workspace/api.yaml"),
+        ("plus_members", "workspace/members_api.yaml"),
+        ("plus_admin", "workspace/admin_api.yaml"),
+        ("plus_transfer", "transfer/api.yaml"),
     ):
         app.connexion_app.add_api(
-            os.path.join(this_dir, "workspace", spec),
+            os.path.join(this_dir, spec),
             base_path="/",
             options={"swagger_ui": False, "serve_spec": False},
             validate_responses=True,

@@ -15,6 +15,7 @@ from celery.schedules import crontab
 
 from application import application, celery  # CE entry point
 from . import register
+from .transfer.tasks import remove_expired_transfers
 from .workspace.tasks import remove_closed_workspaces, remove_expired_invitations
 
 register(application)
@@ -31,4 +32,9 @@ def setup_plus_periodic_tasks(sender, **kwargs):
         crontab(hour=4, minute=30),
         remove_expired_invitations,
         name="remove expired workspace invitations",
+    )
+    sender.add_periodic_task(
+        crontab(hour=4, minute=45),
+        remove_expired_transfers,
+        name="remove expired project transfers",
     )

@@ -24,3 +24,7 @@ class Configuration(object):
     WORKSPACE_CONTRIBUTORS_LIMIT = config(
         "WORKSPACE_CONTRIBUTORS_LIMIT", default=0, cast=int
     )
+    # days a project transfer request is valid
+    PROJECT_TRANSFER_EXPIRATION = config(
+        "PROJECT_TRANSFER_EXPIRATION", default=7, cast=int
+    )

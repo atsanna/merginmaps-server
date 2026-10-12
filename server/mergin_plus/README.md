@@ -27,6 +27,7 @@ celery -A mergin_plus.wsgi.celery beat
 | `USER_WORKSPACES_ALLOWED` | `true` | Regular users can create workspaces (otherwise superusers only) |
 | `WORKSPACE_INVITATION_EXPIRATION` | `14` | Days a workspace invitation is valid |
 | `WORKSPACE_CONTRIBUTORS_LIMIT` | `0` | Maximum contributors of new workspaces (`0` = unlimited) |
+| `PROJECT_TRANSFER_EXPIRATION` | `7` | Days a project transfer request is valid |
 
 With the add-on:
 - `/config` reports `server_type: "ee"`, which QGIS plugin and mobile app need to show workspace features;
@@ -66,6 +67,10 @@ On an existing Community Edition database the global workspace (`GLOBAL_WORKSPAC
 | `GET/POST /app/admin/workspaces` | Superuser: list (paginated, `like`, `order_params`) / create workspace |
 | `GET/PATCH/DELETE /app/admin/workspaces/{id}` | Superuser: detail with members, update `storage` / `contributors_limit` / `active`, schedule removal |
 | `POST /app/admin/workspaces/{id}/restore` | Superuser: cancel scheduled removal |
+| `GET/POST /v2/projects/{id}/transfer` | Pending transfer / request transfer to workspace `workspace` (project owners, workspace admins) |
+| `GET /v2/workspaces/{id}/transfers` | Incoming and outgoing transfers (admin) |
+| `POST /v2/transfers/{id}/accept` | Target workspace admin moves the project, optional new `name`; checks name clash and storage |
+| `DELETE /v2/transfers/{id}` | Decline (target admins) or cancel (source side) |
 
 ## Limits
 

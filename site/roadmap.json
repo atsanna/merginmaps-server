@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-12",
   "stats": {
-    "tests": 49,
+    "tests": 51,
     "endpoints": 20
   },
   "available": [
@@ -52,6 +52,10 @@
     {
       "it": "Limite di contributori per workspace e API di amministrazione dei workspace",
       "en": "Per-workspace contributors limit and workspace administration API"
+    },
+    {
+      "it": "Trasferimento dei progetti tra workspace (API)",
+      "en": "Project transfer between workspaces (API)"
     }
   ],
   "phases": [
@@ -329,14 +333,14 @@
       "steps": [
         {
           "n": "14",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Richiesta e accettazione",
             "en": "Request and acceptance"
           },
           "desc": {
-            "it": "Richiesta con scadenza, accettazione dal workspace di destinazione, notifiche.",
-            "en": "Request with expiry, acceptance by the target workspace, notifications."
+            "it": "API pronta: richiesta con scadenza, accettazione (anche con nuovo nome) o rifiuto dal workspace di destinazione, notifiche; manca l'interfaccia.",
+            "en": "API ready: request with expiry, acceptance (also with a new name) or decline by the target workspace, notifications; UI still missing."
           }
         }
       ]

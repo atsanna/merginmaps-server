@@ -1,0 +1,216 @@
+openapi: 3.0.0
+info:
+  description: Project transfers between workspaces (open source reimplementation of Enterprise features)
+  version: "0.1"
+  title: Mergin project transfers
+servers:
+  - url: /
+tags:
+  - name: transfer
+    description: Project transfers
+paths:
+  /v2/projects/{id}/transfer:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      tags:
+        - transfer
+      summary: Pending transfer of the project
+      operationId: mergin_plus.transfer.controller.project_transfer
+      responses:
+        "200":
+          description: Transfer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transfer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags:
+        - transfer
+      summary: Request project transfer to another workspace (project owners, workspace admins)
+      operationId: mergin_plus.transfer.controller.request_transfer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - workspace
+              properties:
+                workspace:
+                  description: Target workspace name
+                  type: string
+      responses:
+        "201":
+          description: Transfer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transfer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v2/workspaces/{id}/transfers:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags:
+        - transfer
+      summary: Pending incoming and outgoing transfers of workspace (admins)
+      operationId: mergin_plus.transfer.controller.workspace_transfers
+      responses:
+        "200":
+          description: Transfers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  incoming:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Transfer"
+                  outgoing:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Transfer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v2/transfers/{id}/accept:
+    parameters:
+      - $ref: "#/components/parameters/TransferId"
+    post:
+      tags:
+        - transfer
+      summary: Accept transfer (target workspace admins), optionally with a new project name
+      operationId: mergin_plus.transfer.controller.accept_transfer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        "200":
+          description: Moved project
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          description: Storage limit of target workspace
+  /v2/transfers/{id}:
+    parameters:
+      - $ref: "#/components/parameters/TransferId"
+    delete:
+      tags:
+        - transfer
+      summary: Decline (target workspace admins) or cancel (source side) transfer
+      operationId: mergin_plus.transfer.controller.decline_transfer
+      responses:
+        "204":
+          description: Transfer removed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  parameters:
+    ProjectId:
+      name: id
+      in: path
+      description: Project uuid
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TransferId:
+      name: id
+      in: path
+      description: Transfer id
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    BadRequest:
+      description: Invalid request
+    Unauthorized:
+      description: Authentication information is missing or invalid
+    Forbidden:
+      description: Access is denied
+    NotFound:
+      description: Not found
+    Conflict:
+      description: Conflict with existing state
+  schemas:
+    Transfer:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        project_name:
+          type: string
+        from_workspace_id:
+          type: integer
+        from_workspace:
+          type: string
+        to_workspace_id:
+          type: integer
+        to_workspace:
+          type: string
+        requested_by:
+          type: string
+          nullable: true
+        created:
+          type: string
+        expires_at:
+          type: string
+        expired:
+          type: boolean
