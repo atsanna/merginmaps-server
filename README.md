@@ -14,6 +14,16 @@
   <a href="https://coveralls.io/github/MerginMaps/mergin"><img src="https://coveralls.io/repos/github/MerginMaps/mergin/badge.svg"></a>
 </p>
 
+> [!NOTE]
+> **About this fork**  
+> This repository is a community fork of [MerginMaps/server](https://github.com/MerginMaps/server) (Community Edition, AGPL-3.0), developed together with [Claude Code](https://claude.com/claude-code).
+> Its goal is to bring the features of the Mergin Maps Enterprise Edition to the open-source server, implemented independently from public documentation — no proprietary Enterprise code is used.
+>
+> **Disclaimer:** this is an independent project. It is **not affiliated with, endorsed by, sponsored by, or otherwise connected to** Mergin Maps or Lutra Consulting Ltd.
+> It is not an official Mergin Maps product, and it receives no support from the Mergin Maps team: please do not contact them about issues with this fork.
+> "Mergin Maps" and related names and logos are trademarks of their respective owners and are used here only to identify the original software this fork is based on.
+> The rest of this README (below) is inherited from the upstream project and refers to the official Mergin Maps services.
+
 > [!WARNING]
 > **Why are there no releases this year?**  
 > Releases are intentionally paused while we transition to new sync API. New versions will be available early October. Read more here: https://community.merginmaps.com/p/the-state-of-self-hosted-server-releases-august-2026
