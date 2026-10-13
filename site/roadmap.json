@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-12",
+  "updated": "2026-10-13",
   "stats": {
     "tests": 80,
     "endpoints": 20
@@ -183,7 +183,7 @@
         },
         {
           "n": "4",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Selettore e gestione workspace",
             "en": "Workspace switcher and management"
@@ -195,7 +195,7 @@
         },
         {
           "n": "5",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Impostazioni del workspace",
             "en": "Workspace settings"
@@ -281,7 +281,7 @@
         },
         {
           "n": "11",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Scheda Membri e inviti",
             "en": "Members and invitations tab"
@@ -433,7 +433,7 @@
         },
         {
           "n": "19",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Scheda Mappa",
             "en": "Map tab"
