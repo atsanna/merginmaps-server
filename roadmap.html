@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roadmap — Mergin Maps Server, edizione open con funzioni Enterprise</title>
+<meta name="description" content="Stato e prossimi passi del fork open source di Mergin Maps Server che reimplementa le funzioni della Enterprise Edition.">
+<link rel="alternate" hreflang="en" href="roadmap-en.html">
+<meta name="theme-color" content="#f7f6f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d1724" media="(prefers-color-scheme: dark)">
+<script>
+  try { var t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+<style>
+  :root {
+    --ink: #0f2742; --ink-soft: #3c4f66; --muted: #66768a; --paper: #f7f6f2; --card: #ffffff;
+    --line: #dfe3e8; --blue: #1d5fbf; --blue-soft: #e7effa; --terra: #c4553a; --on-blue: #ffffff;
+    --green: #2e9d5b; --amber: #e0a526;
+    --shadow: 0 1px 2px rgba(15,39,66,.06), 0 8px 24px rgba(15,39,66,.08);
+    --radius: 14px;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "Ubuntu Mono", Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #e8eef5; --ink-soft: #bccadb; --muted: #93a3b6; --paper: #0d1724; --card: #142235;
+      --line: #22344b; --blue: #6ea4ff; --blue-soft: #16294a; --terra: #ea8a70; --on-blue: #08111c;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.3); color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #e8eef5; --ink-soft: #bccadb; --muted: #93a3b6; --paper: #0d1724; --card: #142235;
+    --line: #22344b; --blue: #6ea4ff; --blue-soft: #16294a; --terra: #ea8a70; --on-blue: #08111c;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.3); color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.6 var(--font); -webkit-font-smoothing: antialiased; }
+  a { color: var(--blue); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  code { font-family: var(--mono); font-size: .9em; background: var(--blue-soft); padding: 1px 5px; border-radius: 5px; }
+  .wrap { width: min(1160px, 100% - 32px); margin-inline: auto; }
+  .skip { position: absolute; inset-inline-start: -999px; }
+  .skip:focus { inset-inline-start: 16px; top: 16px; background: var(--card); padding: 8px 12px; z-index: 10; }
+
+  header.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--paper) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  .bar { display: flex; align-items: center; gap: 20px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font-weight: 700; font-size: 19px; letter-spacing: -.01em; }
+  .brand b { color: var(--blue); }
+  .bar-right { display: flex; align-items: center; gap: 10px; margin-inline-start: auto; }
+  .lang { color: var(--ink-soft); text-decoration: none; font-size: 14px; border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 6px 10px; }
+  .theme-toggle { width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; display: grid; place-items: center; }
+  .theme-toggle svg { width: 18px; height: 18px; }
+  .theme-toggle .moon { display: none; }
+  :root[data-theme="dark"] .theme-toggle .sun { display: none; }
+  :root[data-theme="dark"] .theme-toggle .moon { display: block; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .theme-toggle .sun { display: none; }
+    :root:not([data-theme="light"]) .theme-toggle .moon { display: block; }
+  }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: 10px; font-weight: 600; font-size: 15px; text-decoration: none; border: 1px solid transparent; transition: transform .12s; }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: var(--blue); color: var(--on-blue); }
+  .btn-ghost { border-color: var(--line); color: var(--ink); background: var(--card); }
+  .bar .btn { padding: 8px 14px; }
+
+  .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--terra); }
+  .eyebrow::before { content: ""; width: 18px; height: 2px; background: currentColor; }
+  h1 { font-size: clamp(36px, 5.2vw, 60px); line-height: 1.06; letter-spacing: -.025em; margin: 14px 0 18px; max-width: 15em; }
+  h1 em { font-style: normal; color: var(--blue); }
+  .lead { font-size: 19px; color: var(--ink-soft); max-width: 40em; margin: 0 0 28px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+  section { padding: 72px 0; }
+  section.alt { background: var(--card); border-block: 1px solid var(--line); }
+  h2 { font-size: clamp(28px, 3.4vw, 40px); line-height: 1.12; letter-spacing: -.02em; margin: 10px 0 14px; }
+  .sub { color: var(--ink-soft); max-width: 46em; margin: 0 0 36px; font-size: 18px; }
+
+  .rp-hero { position: relative; overflow: hidden; padding: 64px 0 40px; }
+  .rp-hero::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 32px 32px; mask-image: radial-gradient(ellipse at 80% 20%, #000 0%, transparent 65%); opacity: .7; pointer-events: none; }
+  .rp-hero .wrap { position: relative; }
+  .now { display: flex; gap: 10px; align-items: baseline; max-width: 52em; margin: 0 0 8px; padding: 14px 18px; border-radius: var(--radius); background: var(--card); border: 1px solid color-mix(in srgb, var(--amber) 60%, var(--line)); box-shadow: var(--shadow); color: var(--ink-soft); }
+  .now b { color: var(--ink); white-space: nowrap; }
+  .pulse { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 60%, transparent); animation: pulse 1.6s infinite; transform: translateY(1px); }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 10px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 36px 0 0; padding: 0; list-style: none; }
+  .stats li { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); }
+  .stats b { display: block; font-size: clamp(28px, 3.6vw, 40px); line-height: 1.05; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .stats span { color: var(--muted); font-size: 14px; }
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 0; padding: 0; list-style: none; }
+  .toc a { display: inline-block; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink-soft); text-decoration: none; font-size: 14px; }
+  .toc a:hover { border-color: var(--blue); color: var(--blue); }
+
+  .avail { columns: 2 320px; column-gap: 32px; list-style: none; padding: 0; margin: 0; }
+  .avail li { break-inside: avoid; padding: 8px 0 8px 30px; position: relative; color: var(--ink-soft); border-bottom: 1px dashed var(--line); }
+  .avail li::before { content: "✓"; position: absolute; inset-inline-start: 0; top: 9px; width: 20px; height: 20px; border-radius: 50%; background: var(--green); color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+
+  .phase { margin-top: 44px; }
+  .phase-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+  .phase-head .prio { font: 700 14px/1 var(--mono); padding: 9px 12px; border-radius: 9px; color: #fff; }
+  .phase-head h3 { margin: 0; font-size: 22px; letter-spacing: -.01em; }
+  .phase-head p { margin: 0; color: var(--muted); font-size: 15px; }
+  .phase-head .count { margin-inline-start: auto; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+  .p0 .prio { background: var(--green); } .p1 .prio { background: var(--blue); } .p2 .prio { background: #7a5bd6; } .p3 .prio { background: var(--terra); }
+  .steps { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .step { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: start; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+  .step .n { font: 700 13px/1 var(--mono); color: var(--muted); background: var(--blue-soft); border-radius: 8px; padding: 8px 0; width: 36px; text-align: center; }
+  .step h4 { margin: 0 0 4px; font-size: 16.5px; line-height: 1.3; }
+  .step p { margin: 0; color: var(--ink-soft); font-size: 14.5px; line-height: 1.5; }
+  .pill { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; border: 1px solid var(--line); color: var(--muted); }
+  .step.done { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
+  .step.done .pill { background: var(--green); border-color: var(--green); color: #fff; }
+  .step.done .n { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+  .step.wip .pill { background: var(--amber); border-color: var(--amber); color: #1b1300; }
+
+  .bars { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+  .bars li { display: grid; grid-template-columns: minmax(12em, 18em) 1fr 4.5em; gap: 16px; align-items: center; }
+  .bars .name { font-weight: 600; font-size: 15.5px; }
+  .bars .track { height: 14px; border-radius: 999px; background: var(--line); overflow: hidden; display: flex; }
+  .bars .d { background: var(--blue); height: 100%; }
+  .bars .p { background: color-mix(in srgb, var(--blue) 40%, transparent); height: 100%; }
+  .bars .pct { text-align: end; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .bars li.total { border-top: 1px solid var(--line); padding-top: 14px; }
+  .legend { display: flex; gap: 18px; margin: 18px 0 0; color: var(--muted); font-size: 14px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-inline-end: 6px; vertical-align: -1px; }
+  .outs { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .outs li { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 14px 44px; position: relative; color: var(--ink-soft); font-size: 15px; }
+  .outs li::before { content: "×"; position: absolute; inset-inline-start: 16px; top: 11px; color: var(--muted); font-size: 20px; line-height: 1; }
+
+  .final { text-align: center; }
+  .final .cta { justify-content: center; }
+  footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--muted); font-size: 14px; }
+  footer small { display: block; margin-top: 16px; line-height: 1.5; max-width: 60em; }
+  .to-top { position: fixed; bottom: 24px; inset-inline-end: 24px; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--ink); display: grid; place-items: center; cursor: pointer; box-shadow: var(--shadow); opacity: 0; visibility: hidden; transition: opacity .2s, visibility .2s; z-index: 6; }
+  .to-top svg { width: 20px; height: 20px; }
+  .to-top.on { opacity: 1; visibility: visible; }
+
+  @media (max-width: 920px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .steps, .outs { grid-template-columns: 1fr; }
+    .bars li { grid-template-columns: 1fr 4em; }
+    .bars .track { grid-column: 1 / -1; grid-row: 2; }
+  }
+  @media (max-width: 560px) {
+    body { font-size: 16px; }
+    .bar .btn { display: none; }
+    section { padding: 52px 0; }
+    .phase-head { flex-wrap: wrap; }
+    .phase-head .count { margin-inline-start: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .btn, .to-top { transition: none; } }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip</a>
+<header class="top">
+  <div class="wrap bar">
+    <a class="brand" href="#top" aria-label="merginmaps-server">
+      <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M16 3c-5 0-9 4-9 9 0 7 9 17 9 17s9-10 9-17c0-5-4-9-9-9z" fill="#1d5fbf"/>
+        <circle cx="16" cy="12" r="3.6" fill="#f7f6f2"/>
+      </svg>
+      <span>merginmaps<b>-server</b></span>
+    </a>
+    <div class="bar-right">
+      <a class="lang" href="roadmap-en.html" hreflang="en" lang="en">English</a>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Cambia tema"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+      <a class="btn btn-primary" href="https://github.com/atsanna/merginmaps-server">GitHub</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="rp-hero" id="top">
+    <div class="wrap">
+      <span class="eyebrow">Roadmap</span>
+      <h1>Dove siamo, <em>dove andiamo</em></h1>
+      <p class="lead">Questo fork di Mergin Maps Server porta nel server open source le funzioni della Enterprise Edition, riscritte da zero partendo solo dalla documentazione pubblica. La pagina si aggiorna a ogni passo completato.</p>
+      <p class="now"><span class="pulse"></span><b>Ora sto lavorando a:</b> Roadmap completata e revisione dei bug conclusa (26 problemi corretti, CI verde, immagine Docker provata end-to-end). In attesa delle tue indicazioni: dove pubblicare le immagini Docker e i prossimi obiettivi.</p>
+      <ul class="stats">
+        <li><b>30</b><span>passi completati</span></li>
+        <li><b>30</b><span>passi pianificati</span></li>
+        <li><b>100 %</b><span>delle funzioni coperte</span></li>
+        <li><b>107</b><span>test automatici</span></li>
+      </ul>
+      <ul class="toc">
+        <li><a href="#disponibile">Disponibile</a></li>
+        <li><a href="#passi">Passi</a></li>
+        <li><a href="#copertura">Copertura</a></li>
+        <li><a href="#fuori">Fuori ambito</a></li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="disponibile" class="alt" aria-labelledby="disponibile-t">
+    <div class="wrap">
+      <span class="eyebrow">Disponibile oggi</span>
+      <h2 id="disponibile-t">Cosa funziona già</h2>
+      <p class="sub">Funzioni del backend già pronte e provate dai test; l&#x27;interfaccia web arriva nei prossimi passi.</p>
+      <ul class="avail">
+<li>Workspace multipli salvati nel database</li>
+<li>Ruoli guest, reader, editor, writer, admin e owner, con permessi per progetto</li>
+<li>Creazione, modifica e chiusura dei workspace, con eliminazione definitiva dopo la scadenza</li>
+<li>Quota di spazio per singolo workspace e riepilogo d&#x27;uso</li>
+<li>Gestione dei membri: elenco, cambio ruolo, rimozione, uscita</li>
+<li>Inviti via email con scadenza, reinvio, accettazione e rifiuto</li>
+<li>Registrazione dal link d&#x27;invito anche con la registrazione libera disattivata</li>
+<li>Ruolo editor: modifica dei dati senza toccare la struttura del progetto QGIS</li>
+<li>Migrazione automatica di un server Community esistente</li>
+<li>API compatibili con il plugin QGIS, l&#x27;app mobile e il client Python</li>
+<li>Inviti come ospite su progetti scelti e condivisione di un progetto con qualsiasi email</li>
+<li>Limite di contributori per workspace e API di amministrazione dei workspace</li>
+<li>Trasferimento dei progetti tra workspace (API)</li>
+<li>Registro attività e webhook firmati per workspace (API)</li>
+<li>Single sign-on SAML/OIDC tramite Ory Polis, compatibile con plugin QGIS e app mobile</li>
+<li>Mappe web: elaborazione delle versioni e servizio WMS tramite QGIS Server (API)</li>
+<li>Interfaccia web per workspace, membri, inviti, trasferimenti, webhook, attività, mappa e SSO</li>
+<li>Mappe condivise con link pubblico, incorporamento e servizi OGC</li>
+</ul>
+    </div>
+  </section>
+
+  <section id="passi" aria-labelledby="passi-t">
+    <div class="wrap">
+      <span class="eyebrow">Prossimi passi</span>
+      <h2 id="passi-t">30 passi, in ordine di dipendenza</h2>
+      <p class="sub">Ogni milestone dipende da quelle prima: prima i workspace, poi membri, quote, trasferimenti, SSO e mappe web.</p>
+
+    <div class="phase p0">
+      <div class="phase-head"><span class="prio">M0</span><div><h3>Fondamenta</h3><p>Il pacchetto che si aggancia alla Community, le migrazioni e i test.</p></div><span class="count">4/4</span></div>
+      <ol class="steps">
+      <li class="step done"><span class="n">F1</span><div><h4>Add-on mergin_plus</h4><p>Nessun file della Community viene modificato: l&#x27;add-on ha un suo punto di avvio e si aggancia solo ai punti di estensione, così seguire le nuove versioni Community resta semplice.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">F2</span><div><h4>Ramo di migrazioni enterprise</h4><p>Tabelle proprie in un ramo Alembic separato, dentro l&#x27;add-on.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">F3</span><div><h4>Test e CI</h4><p>La suite Community, senza modifiche, gira anche sopra l&#x27;add-on, con job dedicati nella CI.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">F4</span><div><h4>Pacchetto frontend</h4><p>Nuovi pacchetti plus-app e plus-admin-app accanto a quelli Community (non modificati), con lint e build nella CI.</p></div><span class="pill">Fatto</span></li>
+      </ol>
+    </div>
+
+    <div class="phase p1">
+      <div class="phase-head"><span class="prio">M1</span><div><h3>Workspace</h3><p>Più workspace per server, ognuno con i suoi progetti e membri.</p></div><span class="count">5/5</span></div>
+      <ol class="steps">
+      <li class="step done"><span class="n">1</span><div><h4>Workspace nel database</h4><p>Nome immutabile, descrizione, quota, ruoli e ospiti.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">2</span><div><h4>API dei workspace</h4><p>Crea, modifica, chiudi, uso; USER_WORKSPACES_ALLOWED.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">3</span><div><h4>Migrazione dal workspace globale</h4><p>Il workspace unico della Community diventa un workspace normale con i suoi membri.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">4</span><div><h4>Selettore e gestione workspace</h4><p>Selettore dei workspace (ultimi usati) nel menu, pagina «Gestisci workspace» con creazione, uscita e inviti ricevuti.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">5</span><div><h4>Impostazioni del workspace</h4><p>Descrizione, utilizzo, chiusura con conferma del nome; schede trasferimenti, webhook e attività.</p></div><span class="pill">Fatto</span></li>
+      </ol>
+    </div>
+
+    <div class="phase p1">
+      <div class="phase-head"><span class="prio">M2</span><div><h3>Membri e inviti</h3><p>Chi entra in un workspace e con quale ruolo.</p></div><span class="count">6/6</span></div>
+      <ol class="steps">
+      <li class="step done"><span class="n">6</span><div><h4>API dei membri</h4><p>Elenco, dettaglio, cambio ruolo, rimozione; solo gli owner gestiscono gli owner.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">7</span><div><h4>Inviti via email</h4><p>Scadenza, reinvio, revoca, accettazione e rifiuto; pulizia automatica.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">8</span><div><h4>Registrazione da invito</h4><p>Account creato dal link, con email già verificata.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">9</span><div><h4>Ruolo editor</h4><p>Push dei soli dati: niente file QGIS né mergin-config.json, GeoPackage solo con diff.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">10</span><div><h4>Ospiti e condivisione esterna</h4><p>Inviti come ospite su progetti scelti; condivisione con email non ancora membri.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">11</span><div><h4>Scheda Membri e inviti</h4><p>Tabella dei membri con ruoli, inviti in sospeso con reinvio, inviti come ospite su progetti scelti, badge degli inviti nell&#x27;intestazione.</p></div><span class="pill">Fatto</span></li>
+      </ol>
+    </div>
+
+    <div class="phase p2">
+      <div class="phase-head"><span class="prio">M3</span><div><h3>Quote e amministrazione</h3><p>Limiti per workspace e strumenti per l&#x27;amministratore del server.</p></div><span class="count">2/2</span></div>
+      <ol class="steps">
+      <li class="step done"><span class="n">12</span><div><h4>Quote per workspace</h4><p>Spazio e numero massimo di contributori per workspace, applicati a ogni modo di assegnare un ruolo.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">13</span><div><h4>Scheda Workspace nell&#x27;admin</h4><p>Scheda Workspace nel pannello admin: elenco, dettaglio, limiti, attiva/disattiva, crea, elimina e ripristina.</p></div><span class="pill">Fatto</span></li>
+      </ol>
+    </div>
+
+    <div class="phase p2">
+      <div class="phase-head"><span class="prio">M4</span><div><h3>Trasferimento dei progetti</h3><p>Spostare un progetto da un workspace a un altro.</p></div><span class="count">1/1</span></div>
+      <ol class="steps">
+      <li class="step done"><span class="n">14</span><div><h4>Richiesta e accettazione</h4><p>Richiesta dalle impostazioni del progetto, accettazione (anche con nuovo nome) o rifiuto dalle impostazioni del workspace.</p></div><span class="pill">Fatto</span></li>
+      </ol>
+    </div>
+
+    <div class="phase p2">
+      <div class="phase-head"><span class="prio">M5</span><div><h3>Single sign-on</h3><p>Accesso con il provider aziendale, SAML o OIDC.</p></div><span class="count">2/2</span></div>
+      <ol class="steps">
+      <li class="step done"><span class="n">15</span><div><h4>Integrazione Ory Polis</h4><p>Ponte SAML/OIDC open source, identity provider scelto dal dominio email, account creati al primo accesso, codici monouso e PKCE.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">16</span><div><h4>Accesso SSO nei client</h4><p>Flusso OAuth2 per plugin QGIS e app mobile, pulsante «Continua con SSO» nella pagina di login.</p></div><span class="pill">Fatto</span></li>
+      </ol>
+    </div>
+
+    <div class="phase p3">
+      <div class="phase-head"><span class="prio">M6</span><div><h3>Mappe web</h3><p>Il progetto visto su una mappa nel browser.</p></div><span class="count">3/3</span></div>
+      <ol class="steps">
+      <li class="step done"><span class="n">17</span><div><h4>Elaborazione delle versioni</h4><p>A ogni nuova versione il progetto QGIS viene letto (layer, albero, temi, estensione, dati inclusi nel progetto) e i file preparati per QGIS Server.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">18</span><div><h4>QGIS Server</h4><p>Proxy WMS verso QGIS Server con controllo dei permessi di progetto (GetMap, legende, informazioni sugli elementi).</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">19</span><div><h4>Scheda Mappa</h4><p>Scheda Mappa con OpenLayers: layer e legende, temi, mappa di base OpenStreetMap, clic sugli elementi, aggiornamento a ogni nuova versione.</p></div><span class="pill">Fatto</span></li>
+      </ol>
+    </div>
+
+    <div class="phase p3">
+      <div class="phase-head"><span class="prio">M7</span><div><h3>Extra</h3><p>Funzioni oltre a quelle documentate dell&#x27;Enterprise Edition.</p></div><span class="count">4/4</span></div>
+      <ol class="steps">
+      <li class="step done"><span class="n">20</span><div><h4>Registro attività</h4><p>Eventi salvati con conservazione configurabile, consultabili nel pannello admin e nelle impostazioni del workspace.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">21</span><div><h4>Webhook</h4><p>Webhook firmati HMAC-SHA256 con filtri, retry, test e blocco degli indirizzi interni, gestiti dalle impostazioni del workspace.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">22</span><div><h4>Personalizzazione grafica</h4><p>Logo (DASHBOARD_LOGO_URL) e nome dell&#x27;istanza (INSTANCE_NAME) nella barra laterale e nel titolo della pagina.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">23</span><div><h4>Mappe condivise e OGC API</h4><p>Link pubblico alla mappa (rigenerabile), pagina incorporabile in un iframe, servizi OGC WMS e WFS in sola lettura attivabili per link.</p></div><span class="pill">Fatto</span></li>
+      </ol>
+    </div>
+
+    <div class="phase p0">
+      <div class="phase-head"><span class="prio">Q</span><div><h3>Qualità e rilascio</h3><p>Immagini Docker, revisione dei bug e prove end-to-end.</p></div><span class="count">3/3</span></div>
+      <ol class="steps">
+      <li class="step done"><span class="n">Q1</span><div><h4>Immagini Docker</h4><p>Backend (immagine Community + add-on), frontend e compose con mappe e SSO opzionali; costruite e provate in locale, non pubblicate.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">Q2</span><div><h4>Revisione dei bug</h4><p>Tre revisioni indipendenti (workspace e permessi, sicurezza, interfaccia): 26 problemi corretti con test di regressione.</p></div><span class="pill">Fatto</span></li>
+      <li class="step done"><span class="n">Q3</span><div><h4>Prove end-to-end</h4><p>Stack Docker completo: login, workspace, progetti, inviti, registro attività, dashboard e pannello admin nel browser.</p></div><span class="pill">Fatto</span></li>
+      </ol>
+    </div>
+    </div>
+  </section>
+
+  <section id="copertura" class="alt" aria-labelledby="copertura-t">
+    <div class="wrap">
+      <span class="eyebrow">Copertura delle funzionalità</span>
+      <h2 id="copertura-t">Quanto della Enterprise Edition è già qui</h2>
+      <p class="sub">Per ogni area contiamo i passi fatti, in corso e da fare (quelli in corso valgono metà). Aggiornato il 2026-10-13.</p>
+      <ul class="bars">
+<li class=""><span class="name">M0 · Fondamenta</span><span class="track" role="img" aria-label="100 %"><span class="d" style="width:100.0%"></span><span class="p" style="width:0.0%"></span></span><span class="pct">100 %</span></li>
+<li class=""><span class="name">M1 · Workspace</span><span class="track" role="img" aria-label="100 %"><span class="d" style="width:100.0%"></span><span class="p" style="width:0.0%"></span></span><span class="pct">100 %</span></li>
+<li class=""><span class="name">M2 · Membri e inviti</span><span class="track" role="img" aria-label="100 %"><span class="d" style="width:100.0%"></span><span class="p" style="width:0.0%"></span></span><span class="pct">100 %</span></li>
+<li class=""><span class="name">M3 · Quote e amministrazione</span><span class="track" role="img" aria-label="100 %"><span class="d" style="width:100.0%"></span><span class="p" style="width:0.0%"></span></span><span class="pct">100 %</span></li>
+<li class=""><span class="name">M4 · Trasferimento dei progetti</span><span class="track" role="img" aria-label="100 %"><span class="d" style="width:100.0%"></span><span class="p" style="width:0.0%"></span></span><span class="pct">100 %</span></li>
+<li class=""><span class="name">M5 · Single sign-on</span><span class="track" role="img" aria-label="100 %"><span class="d" style="width:100.0%"></span><span class="p" style="width:0.0%"></span></span><span class="pct">100 %</span></li>
+<li class=""><span class="name">M6 · Mappe web</span><span class="track" role="img" aria-label="100 %"><span class="d" style="width:100.0%"></span><span class="p" style="width:0.0%"></span></span><span class="pct">100 %</span></li>
+<li class=""><span class="name">M7 · Extra</span><span class="track" role="img" aria-label="100 %"><span class="d" style="width:100.0%"></span><span class="p" style="width:0.0%"></span></span><span class="pct">100 %</span></li>
+<li class=""><span class="name">Q · Qualità e rilascio</span><span class="track" role="img" aria-label="100 %"><span class="d" style="width:100.0%"></span><span class="p" style="width:0.0%"></span></span><span class="pct">100 %</span></li>
+<li class="total"><span class="name">Totale</span><span class="track" role="img" aria-label="100 %"><span class="d" style="width:100.0%"></span><span class="p" style="width:0.0%"></span></span><span class="pct">100 %</span></li>
+</ul>
+      <p class="legend"><span><i style="background:var(--blue)"></i>fatto</span><span><i style="background:color-mix(in srgb, var(--blue) 40%, transparent)"></i>in corso</span></p>
+    </div>
+  </section>
+
+  <section id="fuori" aria-labelledby="fuori-t">
+    <div class="wrap">
+      <span class="eyebrow">Fuori ambito</span>
+      <h2 id="fuori-t">Cosa questo fork non farà</h2>
+      <ul class="outs">
+<li>Telemetria obbligatoria verso Mergin Maps: questo fork non invia statistiche</li>
+<li>Abbonamenti, fatturazione e piani del servizio cloud</li>
+<li>Mappe di base ospitate da Mergin Maps</li>
+<li>Codice o immagini proprietarie dell&#x27;Enterprise Edition</li>
+</ul>
+    </div>
+  </section>
+
+  <section class="alt final">
+    <div class="wrap">
+      <h2>Segui lo sviluppo</h2>
+      <p class="sub" style="margin-inline:auto">Codice, piano di lavoro e analisi delle funzioni sono pubblici su GitHub.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/atsanna/merginmaps-server">Codice su GitHub</a>
+        <a class="btn btn-ghost" href="https://github.com/atsanna/merginmaps-server/blob/main-i0j6kj/docs/enterprise/ROADMAP.md">Piano di lavoro</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 merginmaps-server · Software libero con licenza AGPL-3.0 · Sviluppato con <a href="https://claude.com/claude-code" rel="noopener">Claude Code</a></span>
+    <small>Progetto indipendente: non affiliato, sponsorizzato né approvato da Mergin Maps o Lutra Consulting Ltd. «Mergin Maps» e i relativi nomi e loghi sono marchi dei rispettivi proprietari, usati solo per indicare il software originale da cui deriva questo fork. Le funzioni sono reimplementate dalla documentazione pubblica, senza codice proprietario.</small>
+  </div>
+</footer>
+
+<button class="to-top" id="to-top" type="button" aria-label="Torna all&#x27;inizio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+<script>
+  (function () {
+    var root = document.documentElement;
+    document.getElementById('themeToggle').addEventListener('click', function () {
+      var dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+      root.dataset.theme = dark ? 'light' : 'dark';
+      try { localStorage.setItem('theme', root.dataset.theme); } catch (e) {}
+    });
+    var top = document.getElementById('to-top');
+    addEventListener('scroll', function () { top.classList.toggle('on', scrollY > 600); }, { passive: true });
+    top.addEventListener('click', function () { scrollTo(0, 0); });
+  })();
+</script>
+</body>
+</html>
