@@ -27,6 +27,7 @@ TEXT = {
         "eyebrow": "Roadmap",
         "h1": "Dove siamo, <em>dove andiamo</em>",
         "lead": "Questo fork di Mergin Maps Server porta nel server open source le funzioni della Enterprise Edition, riscritte da zero partendo solo dalla documentazione pubblica. La pagina si aggiorna a ogni passo completato.",
+        "now": "Ora sto lavorando a",
         "stats": ["passi completati", "passi pianificati", "delle funzioni coperte", "test automatici"],
         "toc": ["Disponibile", "Passi", "Copertura", "Fuori ambito"],
         "avail_eyebrow": "Disponibile oggi",
@@ -60,6 +61,7 @@ TEXT = {
         "eyebrow": "Roadmap",
         "h1": "Where we are, <em>where we are going</em>",
         "lead": "This fork of Mergin Maps Server brings the Enterprise Edition features to the open-source server, rewritten from scratch using public documentation only. This page is updated at every completed step.",
+        "now": "Now working on",
         "stats": ["steps completed", "planned steps", "of features covered", "automated tests"],
         "toc": ["Available", "Steps", "Coverage", "Out of scope"],
         "avail_eyebrow": "Available today",
@@ -154,6 +156,11 @@ CSS = """
   .rp-hero { position: relative; overflow: hidden; padding: 64px 0 40px; }
   .rp-hero::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 32px 32px; mask-image: radial-gradient(ellipse at 80% 20%, #000 0%, transparent 65%); opacity: .7; pointer-events: none; }
   .rp-hero .wrap { position: relative; }
+  .now { display: flex; gap: 10px; align-items: baseline; max-width: 52em; margin: 0 0 8px; padding: 14px 18px; border-radius: var(--radius); background: var(--card); border: 1px solid color-mix(in srgb, var(--amber) 60%, var(--line)); box-shadow: var(--shadow); color: var(--ink-soft); }
+  .now b { color: var(--ink); white-space: nowrap; }
+  .pulse { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 60%, transparent); animation: pulse 1.6s infinite; transform: translateY(1px); }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 10px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 36px 0 0; padding: 0; list-style: none; }
   .stats li { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); }
   .stats b { display: block; font-size: clamp(28px, 3.6vw, 40px); line-height: 1.05; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
@@ -260,6 +267,12 @@ def render(data: dict, lang: str) -> str:
     total_pct = coverage(all_steps)[2]
     other_lang, other_file, other_name = t["other"]
     date = data["updated"]
+    now = data.get("now", {}).get(lang)
+    now_html = (
+        f'<p class="now"><span class="pulse"></span><b>{t["now"]}:</b> {escape(now)}</p>'
+        if now
+        else ""
+    )
 
     out = []
     w = out.append
@@ -300,6 +313,7 @@ def render(data: dict, lang: str) -> str:
       <span class="eyebrow">{t["eyebrow"]}</span>
       <h1>{t["h1"]}</h1>
       <p class="lead">{escape(t["lead"])}</p>
+      {now_html}
       <ul class="stats">
         <li><b>{done_count}</b><span>{t["stats"][0]}</span></li>
         <li><b>{len(all_steps)}</b><span>{t["stats"][1]}</span></li>

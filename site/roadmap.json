@@ -514,6 +514,56 @@
           }
         }
       ]
+    },
+    {
+      "id": "Q",
+      "cls": "p0",
+      "title": {
+        "it": "Qualità e rilascio",
+        "en": "Quality and delivery"
+      },
+      "desc": {
+        "it": "Immagini Docker, revisione dei bug e prove end-to-end.",
+        "en": "Docker images, bug review and end-to-end checks."
+      },
+      "steps": [
+        {
+          "n": "Q1",
+          "status": "done",
+          "title": {
+            "it": "Immagini Docker",
+            "en": "Docker images"
+          },
+          "desc": {
+            "it": "Backend (immagine Community + add-on), frontend e compose con mappe e SSO opzionali; costruite e provate in locale, non pubblicate.",
+            "en": "Backend (Community image + add-on), frontend and compose with optional maps and SSO; built and tested locally, not published."
+          }
+        },
+        {
+          "n": "Q2",
+          "status": "wip",
+          "title": {
+            "it": "Revisione dei bug",
+            "en": "Bug review"
+          },
+          "desc": {
+            "it": "Tre revisioni indipendenti (workspace e permessi, sicurezza, interfaccia): 26 problemi corretti con test di regressione.",
+            "en": "Three independent reviews (workspaces and permissions, security, interface): 26 issues fixed with regression tests."
+          }
+        },
+        {
+          "n": "Q3",
+          "status": "wip",
+          "title": {
+            "it": "Prove end-to-end",
+            "en": "End-to-end checks"
+          },
+          "desc": {
+            "it": "Stack Docker completo: login, workspace, progetti, inviti, registro attività, dashboard e pannello admin nel browser.",
+            "en": "Full Docker stack: login, workspaces, projects, invitations, activity log, dashboard and admin panel in the browser."
+          }
+        }
+      ]
     }
   ],
   "out_of_scope": [
@@ -533,5 +583,9 @@
       "it": "Codice o immagini proprietarie dell'Enterprise Edition",
       "en": "Proprietary Enterprise Edition code or images"
     }
-  ]
+  ],
+  "now": {
+    "it": "Revisione dei bug delle funzioni Enterprise: corretti 26 problemi trovati da tre revisioni (permessi, SSRF dei webhook, progetti QGIS malevoli, SSO, interfaccia); ora verifica finale sull'immagine Docker ricostruita.",
+    "en": "Bug review of the Enterprise features: fixed 26 issues found by three reviews (permissions, webhook SSRF, malicious QGIS projects, SSO, interface); now final check on the rebuilt Docker image."
+  }
 }
