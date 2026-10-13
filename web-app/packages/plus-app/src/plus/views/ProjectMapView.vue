@@ -79,7 +79,7 @@ SPDX-License-Identifier: AGPL-3.0-only
             </div>
           </div>
         </app-section>
-        <app-section v-if="canRefresh">
+        <app-section v-if="canShare">
           <template #title>Share map</template>
           <div class="px-4 pb-4 flex flex-column gap-2">
             <template v-if="link.enabled">
@@ -189,12 +189,15 @@ const notReady = ref(false)
 const visible = ref<string[]>([])
 const theme = ref<string>()
 const featureInfo = ref<{ layer: string; properties: object }[]>([])
-const canRefresh = computed(() => !props.token && projectStore.isProjectOwner)
+// processing needs write access, sharing needs project owner (or workspace admin) access
+const canRefresh = computed(() => !props.token && projectStore.isProjectWriter)
+const canShare = computed(() => !props.token && projectStore.isProjectOwner)
 const link = ref<MapLink>({ enabled: false })
 const themeNames = computed(() => Object.keys(config.value?.themes ?? {}))
 
 let map: OlMap | undefined
 let wmsSource: ImageWMS | undefined
+let wmsLayer: ImageLayer<ImageWMS> | undefined
 let poll: number | undefined
 
 const wmsUrl = computed(() =>
@@ -256,6 +259,10 @@ function createMap() {
     serverType: 'qgis',
     crossOrigin: 'use-credentials'
   })
+  wmsLayer = new ImageLayer({
+    source: wmsSource,
+    visible: layerNames(visible.value).length > 0
+  })
   map = new OlMap({
     target: mapElement.value,
     layers: [
@@ -265,12 +272,18 @@ function createMap() {
           attributions: cfg.basemap.attribution
         })
       }),
-      new ImageLayer({ source: wmsSource })
+      wmsLayer
     ],
     view: new View({ center: [0, 0], zoom: 2 })
   })
   map.on('singleclick', async (evt) => {
-    const queryLayers = layerNames(visible.value)
+    // only vector layers can be identified, other layers make QGIS Server refuse the whole request
+    const vectorIds = (config.value?.layers ?? [])
+      .filter((l) => l.type === 'vector')
+      .map((l) => l.id)
+    const queryLayers = layerNames(
+      visible.value.filter((id) => vectorIds.includes(id))
+    )
     if (!queryLayers.length) return
     const url = wmsSource.getFeatureInfoUrl(
       evt.coordinate,
@@ -318,7 +331,13 @@ async function load() {
       // wait for the map element to be rendered
       setTimeout(createMap)
     } else if (changed) {
-      wmsSource?.updateParams({ _v: data.version })
+      // layers may have been added, renamed or removed in the new version
+      const ids = data.layers.filter((l) => l.packaged).map((l) => l.id)
+      visible.value = visible.value.filter((id) => ids.includes(id))
+      wmsSource?.updateParams({
+        _v: data.version,
+        LAYERS: layerNames(visible.value).join(',')
+      })
     }
   } catch (err) {
     if ((err as { response?: { status?: number } })?.response?.status === 404) {
@@ -327,7 +346,7 @@ async function load() {
       notificationStore.error({ text: apiError(err, 'Failed to load map') })
     }
   }
-  if (canRefresh.value && !link.value.token) {
+  if (canShare.value && !link.value.token) {
     try {
       link.value = (await PlusApi.mapLink(projectStore.project.id)).data
     } catch {
@@ -348,8 +367,12 @@ async function updateLink(data: {
 }
 
 async function disableLink() {
-  await PlusApi.deleteMapLink(projectStore.project.id)
-  link.value = { enabled: false }
+  try {
+    await PlusApi.deleteMapLink(projectStore.project.id)
+    link.value = { enabled: false }
+  } catch (err) {
+    notificationStore.error({ text: apiError(err, 'Failed to stop sharing') })
+  }
 }
 
 const embedCode = computed(
@@ -383,7 +406,10 @@ watch(
 )
 
 watch(visible, (ids) => {
-  wmsSource?.updateParams({ LAYERS: layerNames(ids).join(',') })
+  const names = layerNames(ids)
+  // QGIS Server refuses GetMap without layers, hide the overlay instead
+  wmsLayer?.setVisible(names.length > 0)
+  if (names.length) wmsSource?.updateParams({ LAYERS: names.join(',') })
 })
 
 watch(theme, (name) => {

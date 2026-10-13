@@ -185,13 +185,17 @@ def datasource_file(provider: str, datasource: str) -> Optional[str]:
     return normalized
 
 
-def _layer_tree(group: ET.Element, layers: dict, parents: List[str]) -> list:
+def _layer_tree(
+    group: ET.Element, layers: dict, parents: List[str], parent_visible: bool = True
+) -> list:
+    """Layer tree nodes; a layer is visible only when it and all its groups are checked"""
     nodes = []
     for child in group:
+        checked = child.get("checked") == "Qt::Checked"
         if child.tag == "layer-tree-layer":
             layer_id = child.get("id")
             if layer_id in layers:
-                layers[layer_id]["visible"] = child.get("checked") == "Qt::Checked"
+                layers[layer_id]["visible"] = checked and parent_visible
                 layers[layer_id]["groups"] = parents
                 nodes.append({"type": "layer", "id": layer_id})
         elif child.tag == "layer-tree-group":
@@ -200,8 +204,10 @@ def _layer_tree(group: ET.Element, layers: dict, parents: List[str]) -> list:
                 {
                     "type": "group",
                     "name": name,
-                    "visible": child.get("checked") == "Qt::Checked",
-                    "children": _layer_tree(child, layers, parents + [name]),
+                    "visible": checked,
+                    "children": _layer_tree(
+                        child, layers, parents + [name], parent_visible and checked
+                    ),
                 }
             )
     return nodes

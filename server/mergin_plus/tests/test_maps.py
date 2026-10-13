@@ -102,6 +102,14 @@ def test_parse_project(tmp_path):
     assert not layers["ortho_1"]["packaged"] and not layers["ortho_1"]["visible"]
     assert config["themes"] == {"only points": ["points_1"]}
     assert config["tree"][0]["name"] == "Data"
+    # layers of unchecked groups are not visible
+    hidden = QGS.replace(
+        '<layer-tree-group name="Data" checked="Qt::Checked">',
+        '<layer-tree-group name="Data" checked="Qt::Unchecked">',
+    )
+    path.write_text(hidden)
+    layers = parse_project(str(path), ["survey.qgs", "base.gpkg"])["layers"]
+    assert not next(l for l in layers if l["id"] == "points_1")["visible"]
 
     # .qgz is a zip with the .qgs inside
     qgz = tmp_path / "survey.qgz"

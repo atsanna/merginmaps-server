@@ -94,6 +94,8 @@ onMounted(async () => {
   try {
     const resp = await PlusApi.myInvitations()
     invitation.value = resp.data.find((i) => i.uuid === props.uuid)
+  } catch {
+    // shown as not valid invitation
   } finally {
     loaded.value = true
   }

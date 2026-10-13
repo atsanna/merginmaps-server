@@ -52,3 +52,6 @@ product = `mergin-maps-product` and redirect URL `<MERGIN_BASE_URL>/v2/sso/callb
 - `nginx.proxy.conf` of the web image and `../common/nginx.conf` listen on IPv4 and IPv6, as in the Community Edition;
   on hosts without IPv6 remove the `listen [::]:8080;` lines.
 - Usage statistics are never sent to Mergin Maps by the add-on.
+- Shared maps (`/maps/<token>`) can be embedded in other sites with an iframe. If you put the server behind a proxy
+  sending `Content-Security-Policy: frame-ancestors 'self'` (like `../common/ssl-proxy.conf`), relax it for `/maps/`
+  and `/v2/maps/`.

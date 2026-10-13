@@ -346,8 +346,18 @@ export const createRouter = (pinia: Pinia) => {
         }
       },
       {
+        // link of transfer e-mails: switch to the target workspace first
         path: '/workspaces/:id/transfers',
-        redirect: '/workspace/settings'
+        name: 'plus-workspace-transfers',
+        component: NotFoundView,
+        beforeEnter: async (to) => {
+          const userStore = useUserStore(pinia)
+          const id = Number(to.params.id)
+          if (userStore.isLoggedIn && userStore.getWorkspaceById({ id })) {
+            await userStore.setWorkspace({ workspaceId: id })
+          }
+          return { path: '/workspace/settings', query: { tab: 'transfers' } }
+        }
       },
       {
         // public shared map, also embeddable in an iframe
@@ -373,9 +383,18 @@ export const createRouter = (pinia: Pinia) => {
   })
 
   /** Selects current workspace (last used, preferred or first one) once the user is signed in. */
+  let workspaceCheckedFor: number | undefined
   router.beforeEach(async (to, from, next) => {
     const userStore = useUserStore(pinia)
-    if (userStore.isLoggedIn && !userStore.currentWorkspace) {
+    const userId = userStore.loggedUser?.id
+    // once per signed in user (users without workspaces would otherwise reload them on every page)
+    if (
+      userStore.isLoggedIn &&
+      !userStore.currentWorkspace &&
+      userId !== undefined &&
+      workspaceCheckedFor !== userId
+    ) {
+      workspaceCheckedFor = userId
       await userStore.checkCurrentWorkspace()
     }
     next()

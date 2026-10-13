@@ -395,8 +395,10 @@ const saveLimits = async () => {
   if (!workspace.value || form.storageGb === null) return
   saving.value = true
   try {
+    // send storage only when changed: the GB value shown in the form is rounded
+    const storageChanged = form.storageGb !== bytesToGb(workspace.value.storage)
     const response = await PlusAdminApi.updateWorkspace(workspace.value.id, {
-      storage: gbToBytes(form.storageGb),
+      ...(storageChanged ? { storage: gbToBytes(form.storageGb) } : {}),
       contributors_limit: form.contributorsLimit ?? null,
       description: form.description.trim() || null
     })

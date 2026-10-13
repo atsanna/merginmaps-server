@@ -229,15 +229,29 @@ async function load() {
     members.value = m.data
     invitations.value = i.data
     usage.value = u.data
-    const p = await getHttpService().get(`/v2/workspaces/${id}/projects`, {
-      params: { page: 1, per_page: 100 }
-    })
-    projects.value = p.data.items ?? []
+    await loadProjects(id)
   } catch (err) {
     notificationStore.error({ text: apiError(err, 'Failed to load members') })
   } finally {
     loading.value = false
   }
+}
+
+/** Workspace projects for guest invitations (API pages have at most 50 items) */
+async function loadProjects(id: number) {
+  const items: { id: string; name: string }[] = []
+  try {
+    for (let page = 1; page <= 20; page++) {
+      const resp = await getHttpService().get(`/v2/workspaces/${id}/projects`, {
+        params: { page, per_page: 50 }
+      })
+      items.push(...(resp.data.projects ?? []))
+      if (items.length >= resp.data.count || !resp.data.projects?.length) break
+    }
+  } catch {
+    // guest invitations are not possible without the list, members still work
+  }
+  projects.value = items
 }
 
 watch(workspace, load, { immediate: true })

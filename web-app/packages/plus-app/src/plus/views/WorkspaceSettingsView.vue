@@ -6,7 +6,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
   <app-container v-if="workspace">
-    <PTabView>
+    <PTabView
+      :active-index="activeTab"
+      @update:active-index="activeTab = $event"
+    >
       <PTabPanel header="General">
         <app-section class="mb-3">
           <template #title>{{ workspace.name }}</template>
@@ -217,6 +220,7 @@ SPDX-License-Identifier: AGPL-3.0-only
             data-key="id"
             lazy
             paginator
+            :first="(auditPage - 1) * perPage"
             :rows="perPage"
             :total-records="audit.count"
             @page="(e) => loadAudit(e.page + 1)"
@@ -250,7 +254,7 @@ import {
   useUserStore
 } from '@mergin/lib'
 import { computed, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import {
   AuditEvent,
@@ -281,6 +285,10 @@ const hookEvents = ref('')
 const newSecret = ref('')
 const audit = ref<Page<AuditEvent>>({ items: [], count: 0 })
 const perPage = 25
+const auditPage = ref(1)
+const route = useRoute()
+const TABS = ['general', 'transfers', 'webhooks', 'activity']
+const activeTab = ref(Math.max(0, TABS.indexOf(String(route.query.tab ?? ''))))
 const eventFilter = ref('')
 
 async function load() {
@@ -307,12 +315,17 @@ async function load() {
 watch(workspace, load, { immediate: true })
 
 async function loadAudit(page: number) {
-  const resp = await PlusApi.workspaceAudit(workspace.value.id, {
-    page,
-    per_page: perPage,
-    event_type: eventFilter.value.trim() || undefined
-  })
-  audit.value = resp.data
+  try {
+    const resp = await PlusApi.workspaceAudit(workspace.value.id, {
+      page,
+      per_page: perPage,
+      event_type: eventFilter.value.trim() || undefined
+    })
+    audit.value = resp.data
+    auditPage.value = page
+  } catch (err) {
+    notificationStore.error({ text: apiError(err, 'Failed to load activity') })
+  }
 }
 
 function details(metadata: Record<string, unknown>) {
@@ -405,12 +418,22 @@ async function addWebhook() {
 }
 
 async function toggleWebhook(hook: Webhook, active: boolean) {
-  await PlusApi.updateWebhook(workspace.value.id, hook.id, { active })
-  await load()
+  try {
+    await PlusApi.updateWebhook(workspace.value.id, hook.id, { active })
+    await load()
+  } catch (err) {
+    notificationStore.error({ text: apiError(err, 'Failed to update webhook') })
+  }
 }
 
 async function pingWebhook(hook: Webhook) {
-  const resp = await PlusApi.pingWebhook(workspace.value.id, hook.id)
+  let resp
+  try {
+    resp = await PlusApi.pingWebhook(workspace.value.id, hook.id)
+  } catch (err) {
+    notificationStore.error({ text: apiError(err, 'Failed to test webhook') })
+    return
+  }
   if (resp.data.ok) {
     notificationStore.show({ text: `Test delivered (${resp.data.status})` })
   } else {
@@ -422,7 +445,11 @@ async function pingWebhook(hook: Webhook) {
 
 async function deleteWebhook(hook: Webhook) {
   if (!confirm(`Delete webhook ${hook.url}?`)) return
-  await PlusApi.deleteWebhook(workspace.value.id, hook.id)
-  await load()
+  try {
+    await PlusApi.deleteWebhook(workspace.value.id, hook.id)
+    await load()
+  } catch (err) {
+    notificationStore.error({ text: apiError(err, 'Failed to delete webhook') })
+  }
 }
 </script>
