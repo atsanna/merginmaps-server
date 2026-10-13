@@ -1,0 +1,99 @@
+# Copyright (C) 2026 merginmaps-server contributors
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Mergin Maps server with the open source enterprise add-on (mergin_plus).
+# Images are built locally with ./build.sh. Optional parts:
+#   docker compose -f docker-compose.yml -f docker-compose.maps.yml up -d   (web maps)
+#   docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d    (single sign-on)
+
+networks:
+  merginmaps:
+    name: mergin
+
+x-backend: &backend
+  image: merginmaps-server-plus:${TAG:-local}
+  restart: always
+  env_file:
+    - .prod.env
+  networks:
+    - merginmaps
+
+services:
+  db:
+    image: postgres:14
+    container_name: merginmaps-db
+    restart: always
+    networks:
+      - merginmaps
+    environment:
+      - POSTGRES_DB=mergin
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+    volumes:
+      - ./mergin_db:/var/lib/postgresql/data
+  redis:
+    image: redis:6.2.17
+    container_name: merginmaps-redis
+    restart: always
+    networks:
+      - merginmaps
+  server:
+    <<: *backend
+    container_name: merginmaps-server
+    user: 901:999
+    volumes:
+      - ./projects:/data
+      - ./diagnostic_logs:/diagnostic_logs
+    depends_on:
+      - db
+      - redis
+    command: ["gunicorn --config config.py mergin_plus.wsgi:application"]
+  celery-beat:
+    <<: *backend
+    container_name: celery-beat
+    environment:
+      - GEVENT_WORKER=0
+      - NO_MONKEY_PATCH=1
+    depends_on:
+      - redis
+      - server
+    command: ["celery -A mergin_plus.wsgi.celery beat --loglevel=info"]
+  celery-worker:
+    <<: *backend
+    container_name: celery-worker
+    user: 901:999
+    environment:
+      - GEVENT_WORKER=0
+      - NO_MONKEY_PATCH=1
+    volumes:
+      - ./projects:/data
+    depends_on:
+      - redis
+      - server
+      - celery-beat
+    command: ["celery -A mergin_plus.wsgi.celery worker --loglevel=info"]
+  web:
+    image: merginmaps-web-plus:${TAG:-local}
+    container_name: merginmaps-web
+    restart: always
+    depends_on:
+      - server
+    user: 101:999
+    networks:
+      - merginmaps
+  proxy:
+    image: nginxinc/nginx-unprivileged:1.27
+    container_name: merginmaps-proxy
+    restart: always
+    user: 101:999
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    volumes:
+      - ./projects:/data
+      - ../common/nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - web
+      - server
+    networks:
+      - merginmaps

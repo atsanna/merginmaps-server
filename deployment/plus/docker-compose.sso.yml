@@ -1,0 +1,35 @@
+# Copyright (C) 2026 merginmaps-server contributors
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Single sign-on: Ory Polis (formerly BoxyHQ SAML Jackson, Apache-2.0) as SAML / OIDC bridge.
+# Copy .sso.env.template to .sso.env, set SSO_ENABLED=true and SSO_SERVER_API_KEY (one of JACKSON_API_KEYS)
+# in .prod.env, then configure connections at http://<host>:8081 (tenant = e-mail domain,
+# product = mergin-maps-product, redirect URL = <MERGIN_BASE_URL>/v2/sso/callback).
+
+services:
+  polis-db-init:
+    image: postgres:14
+    restart: "no"
+    environment:
+      - PGPASSWORD=${DB_PASSWORD:-postgres}
+    command: >
+      sh -c "until pg_isready -h db -U postgres; do sleep 1; done;
+             psql -h db -U postgres -tc \"SELECT 1 FROM pg_database WHERE datname = 'polis'\" | grep -q 1
+             || psql -h db -U postgres -c 'CREATE DATABASE polis'"
+    depends_on:
+      - db
+    networks:
+      - merginmaps
+  polis:
+    image: boxyhq/jackson:${POLIS_TAG:-1.48.2}
+    container_name: merginmaps-polis
+    restart: always
+    env_file:
+      - .sso.env
+    ports:
+      - "${SSO_PORT:-8081}:5225"
+    depends_on:
+      - polis-db-init
+    networks:
+      - merginmaps

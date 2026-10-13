@@ -1,0 +1,33 @@
+# Copyright (C) 2026 merginmaps-server contributors
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Web maps: official QGIS Server image (FastCGI) behind nginx, reading the project versions
+# prepared by the add-on in OVERVIEW_DATA (inside the shared projects volume).
+# Set MAPS_ENABLED=true in .prod.env.
+
+services:
+  qgis:
+    image: qgis/qgis-server:${QGIS_SERVER_TAG:-ltr}
+    container_name: merginmaps-qgis
+    restart: always
+    user: 901:999
+    environment:
+      - QGIS_SERVER_PARALLEL_RENDERING=false
+      - QGIS_SERVER_WMS_MAX_HEIGHT=1536
+      - QGIS_SERVER_WMS_MAX_WIDTH=1536
+      - QGIS_SERVER_LOG_LEVEL=2
+    volumes:
+      - ./projects:/data:ro
+    networks:
+      - merginmaps
+  qgis-server:
+    image: nginxinc/nginx-unprivileged:1.27
+    container_name: merginmaps-qgis-server
+    restart: always
+    volumes:
+      - ./qgis_nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - qgis
+    networks:
+      - merginmaps

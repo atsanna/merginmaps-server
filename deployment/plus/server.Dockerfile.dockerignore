@@ -1,0 +1,6 @@
+# only the add-on, the rest comes from the Community Edition base image
+*
+!mergin_plus
+mergin_plus/tests
+mergin_plus/test_migrations
+**/__pycache__
