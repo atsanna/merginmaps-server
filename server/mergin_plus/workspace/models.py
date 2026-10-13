@@ -90,15 +90,20 @@ class Workspace(db.Model, AbstractWorkspace):
         """Permanently remove closed workspace projects and memberships.
         Workspace row is kept with a free name as (removed) projects still reference it.
         """
+        # free the name first with a value valid workspace names can never have,
+        # so nothing can fail after project files are removed
+        if not self.name.endswith(f"#deleted-{self.id}"):
+            self.name = f"{self.name}#deleted-{self.id}"
+        self.active = False
+        WorkspaceMember.query.filter_by(workspace_id=self.id).delete()
+        WorkspaceInvitation.query.filter_by(workspace_id=self.id).delete()
+        db.session.commit()
         projects = Project.query.filter(
             Project.workspace_id == self.id, Project.storage_params.isnot(None)
         ).all()
         for p in projects:
             p.delete(removed_by=self.removed_by)
-        WorkspaceMember.query.filter_by(workspace_id=self.id).delete()
-        WorkspaceInvitation.query.filter_by(workspace_id=self.id).delete()
-        self.name = f"{self.name}_{self.id}"
-        self.active = False
+            db.session.commit()
         self.deleted = True
         db.session.commit()
 

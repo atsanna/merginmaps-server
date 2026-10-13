@@ -86,7 +86,7 @@ def create_workspace():
     error = workspace_name_validation(name)
     if error:
         abort(400, error)
-    if current_app.ws_handler.get_by_name(name):
+    if current_app.ws_handler.name_taken(name):
         abort(409, f"Workspace {name} already exists")
     _validate_limits(data)
     limit = data.get(

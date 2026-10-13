@@ -287,7 +287,7 @@ def test_close_and_purge_workspace(client):
     remove_closed_workspaces()
     ws = db.session.get(Workspace, ws_id)
     assert ws.deleted
-    assert ws.name == f"closing_{ws_id}"
+    assert ws.name == f"closing#deleted-{ws_id}"
     assert db.session.get(Project, p.id).storage_params is None
     assert WorkspaceMember.query.filter_by(workspace_id=ws_id).count() == 0
 

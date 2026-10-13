@@ -63,6 +63,57 @@ def extend_public_config(app: Flask):
     app.view_functions["config"] = config
 
 
+def guard_create_user(app: Flask):
+    """Validate workspace part of CE POST /v2/users before CE creates the user.
+
+    CE only checks that the caller can add users to the workspace, the add-on also requires an active workspace,
+    owner permission to create owners, no guest role (guests are invited to projects) and a free contributor seat.
+    """
+    from flask import abort, request
+    from flask_login import current_user
+
+    from mergin.sync.interfaces import WorkspaceRole
+    from .workspace.limits import check_can_add_contributor
+    from .workspace.models import CONTRIBUTOR_ROLES
+
+    endpoint = next(
+        (
+            rule.endpoint
+            for rule in app.url_map.iter_rules()
+            if rule.rule == "/v2/users" and "POST" in rule.methods
+        ),
+        None,
+    )
+    view = app.view_functions.get(endpoint) if endpoint else None
+    if not view or getattr(view, "_plus_guarded", False):
+        return
+
+    @functools.wraps(view)
+    def create_user(*args, **kwargs):
+        data = request.get_json(silent=True) or {}
+        if current_user.is_authenticated and "workspace_id" in data:
+            ws = app.ws_handler.get(data.get("workspace_id"))
+            if ws and ws.can_add_users(current_user):
+                if not ws.is_active:
+                    abort(404, "Workspace not found")
+                role = data.get("role")
+                if role == WorkspaceRole.GUEST.value:
+                    abort(
+                        400,
+                        "Users can not be created as guests, invite them to projects",
+                    )
+                if role == WorkspaceRole.OWNER.value and not ws.user_has_permissions(
+                    current_user, "owner"
+                ):
+                    abort(403, "Only workspace owners can manage owners")
+                if role in CONTRIBUTOR_ROLES:
+                    check_can_add_contributor(ws)
+        return view(*args, **kwargs)
+
+    create_user._plus_guarded = True
+    app.view_functions[endpoint] = create_user
+
+
 def register(app: Flask):
     """Plug enterprise features into CE application"""
     from mergin.stats.config import Configuration as StatsConfiguration
@@ -124,4 +175,5 @@ def register(app: Flask):
     app.extensions["audit"]["sink"] = AuditSink()
     app.register_error_handler(ContributorsLimitHit, handle_limit_hit)
     extend_public_config(app)
+    guard_create_user(app)
     configure_migrations(app)

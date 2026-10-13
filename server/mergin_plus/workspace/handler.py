@@ -5,6 +5,7 @@
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+from flask import g, has_request_context
 from flask_login import current_user
 from sqlalchemy import Column, func, or_
 
@@ -47,18 +48,44 @@ class WorkspaceHandler(GlobalWorkspaceHandler):
             return None
         return db.session.get(Workspace, id_)
 
+    @staticmethod
+    def _by_name_query():
+        """Lookups by name are used by CE endpoints (e.g. project creation, cloning) which do not check
+        whether the workspace is active, so closed and deactivated workspaces are visible only to superusers
+        """
+        query = Workspace.query.filter(Workspace.deleted.is_(False))
+        # only use user already loaded by authentication, do not trigger loading it here
+        user = g.get("_login_user") if has_request_context() else None
+        if not (user and user.is_authenticated and user.is_admin):
+            query = query.filter(
+                Workspace.removed_at.is_(None), Workspace.active.is_(True)
+            )
+        return query
+
     def get_by_name(self, name) -> Optional[Workspace]:
         if not name:
             return None
-        return Workspace.query.filter(
-            func.lower(Workspace.name) == name.lower()
-        ).first()
+        return (
+            self._by_name_query()
+            .filter(func.lower(Workspace.name) == name.lower())
+            .first()
+        )
 
     def get_by_names(self, names) -> List[Workspace]:
         lowered = {n.lower() for n in names if n}
         if not lowered:
             return []
-        return Workspace.query.filter(func.lower(Workspace.name).in_(lowered)).all()
+        return (
+            self._by_name_query().filter(func.lower(Workspace.name).in_(lowered)).all()
+        )
+
+    @staticmethod
+    def name_taken(name: str) -> bool:
+        """Name is used by any (also closed or deactivated) workspace"""
+        return (
+            Workspace.query.filter(func.lower(Workspace.name) == name.lower()).first()
+            is not None
+        )
 
     def get_by_project(self, project) -> Optional[Workspace]:
         return self.get(project.workspace_id)
@@ -111,7 +138,12 @@ class WorkspaceHandler(GlobalWorkspaceHandler):
         )
 
     def list_user_invitations(self, user) -> List[WorkspaceInvitation]:
-        """Pending (not expired) invitations for user email"""
+        """Pending (not expired) invitations for user email.
+        The e-mail must be verified: CE lets users change their e-mail without verification,
+        so an unverified address does not prove the invitation was meant for them.
+        """
+        if not user.verified_email:
+            return []
         return (
             WorkspaceInvitation.query.join(Workspace)
             .filter(
@@ -232,23 +264,43 @@ class WorkspaceHandler(GlobalWorkspaceHandler):
         return query
 
     def project_access(self, project: Project) -> List[ProjectAccessDetail]:
-        """Users with access to project, either directly or through workspace membership"""
-        ws = self.get(project.workspace_id)
-        result = []
-        seen = set()
-        direct_ids = [pu.user_id for pu in project.project_users]
-        direct_members = (
-            User.query.filter(User.active.is_(True), User.id.in_(direct_ids))
+        """Users with access to project, either directly or through workspace membership.
+        Roles are computed in memory (same rules as ProjectPermissions) to avoid queries per user.
+        """
+        ws_roles = {
+            m.user_id: WorkspaceRole(m.role)
+            for m in WorkspaceMember.query.filter_by(workspace_id=project.workspace_id)
+        }
+        project_roles = {
+            pu.user_id: ProjectRole(pu.role) for pu in project.project_users
+        }
+        users = (
+            User.query.filter(
+                User.active.is_(True),
+                User.id.in_(set(ws_roles) | set(project_roles)),
+            )
             .order_by(User.email)
             .all()
         )
-        for user in direct_members + [u for u, _ in ws.members()]:
-            if user.id in seen:
-                continue
-            seen.add(user.id)
-            permission = ProjectPermissions.get_user_project_role(project, user)
-            project_role = project.get_role(user.id)
-            ws_role = ws.get_user_role(user)
+        # workspace role -> implied project role
+        implied = {
+            WorkspaceRole.OWNER: ProjectRole.OWNER,
+            WorkspaceRole.ADMIN: ProjectRole.OWNER,
+            WorkspaceRole.WRITER: ProjectRole.WRITER,
+            WorkspaceRole.EDITOR: ProjectRole.EDITOR,
+            WorkspaceRole.READER: ProjectRole.READER,
+        }
+        order = list(ProjectRole)
+        result = []
+        for user in users:
+            ws_role = ws_roles.get(user.id)
+            if ws_role is None and user.id in project_roles:
+                ws_role = WorkspaceRole.GUEST
+            project_role = project_roles.get(user.id)
+            candidates = [r for r in (implied.get(ws_role), project_role) if r]
+            if user.is_admin:
+                candidates.append(ProjectRole.OWNER)
+            permission = max(candidates, key=order.index) if candidates else None
             result.append(
                 ProjectAccessDetail(
                     id=user.id,

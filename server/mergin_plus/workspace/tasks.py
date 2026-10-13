@@ -23,7 +23,12 @@ def remove_closed_workspaces():
     ).all()
     for ws in workspaces:
         logging.info(f"Removing closed workspace {ws.name} (id {ws.id})")
-        ws.purge()
+        try:
+            ws.purge()
+        except Exception:
+            # do not block removal of other workspaces, retried on the next run
+            db.session.rollback()
+            logging.exception(f"Failed to remove closed workspace {ws.id}")
 
 
 @celery.task

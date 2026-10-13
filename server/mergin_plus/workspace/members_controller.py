@@ -210,7 +210,13 @@ def _invite(ws: Workspace, email: str, role: WorkspaceRole, projects: list):
     Returns (invitation, created)
     """
     inv = WorkspaceInvitation.query.filter_by(workspace_id=ws.id, email=email).first()
-    if invitation_adds_contributor(role.value, projects):
+    pending = inv if inv and not inv.is_expired else None
+    user = User.query.filter(func.lower(User.email) == email).first()
+    already_contributor = bool(
+        (pending and invitation_adds_contributor(pending.role, pending.projects))
+        or (user and user.id in ws.contributors())
+    )
+    if invitation_adds_contributor(role.value, projects) and not already_contributor:
         check_can_add_contributor(ws, pending_contributor_invitations(ws))
     if inv and inv.is_expired:
         db.session.delete(inv)

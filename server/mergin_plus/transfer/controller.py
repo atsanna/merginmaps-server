@@ -19,11 +19,12 @@ from mergin.auth import auth_required
 from mergin.celery import send_email_async
 from mergin.sync.errors import StorageLimitHit
 from mergin.sync.forms import project_name_validation
-from mergin.sync.models import Project
+from mergin.sync.models import Project, ProjectRole
 from mergin.sync.permissions import ProjectPermissions, require_project_by_uuid
 from mergin.sync.interfaces import WorkspaceRole
 from mergin.sync.events import SyncEventType
 from ..events import emit_event
+from ..workspace.limits import ContributorsLimitHit
 from .models import ProjectTransfer
 
 
@@ -147,6 +148,18 @@ def accept_transfer(id: str):
         return StorageLimitHit(usage, target.storage).response(422)
 
     _emit(SyncEventType.PROJECT_TRANSFER_REQUEST_ACCEPTED, transfer, new_name=name)
+    # direct collaborators move with the project and may exceed target contributors limit
+    if target.contributors_limit is not None:
+        project_contributors = {
+            pu.user_id
+            for pu in project.project_users
+            if pu.role != ProjectRole.READER.value and pu.user and pu.user.active
+        }
+        current = target.contributors()
+        if project_contributors - current and (
+            len(current | project_contributors) > target.contributors_limit
+        ):
+            raise ContributorsLimitHit(target)
     project.workspace_id = target.id
     project.name = name
     db.session.delete(transfer)
