@@ -29,6 +29,8 @@ PUBLIC_KEYS = [
     "INSTANCE_NAME",
     # QGIS plugin and mobile app offer SSO login when sso_enabled is true
     "SSO_ENABLED",
+    # admin panel links to the Polis admin UI
+    "SSO_SERVER_URL",
     "MAPS_ENABLED",
 ]
 

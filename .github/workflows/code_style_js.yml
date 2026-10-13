@@ -21,3 +21,14 @@ jobs:
             cd web-app
             yarn install
             yarn run lint:no-legacy
+      - name: Check add-on JS
+        run: |
+            cd web-app
+            yarn workspace @mergin/plus-app lint
+            yarn workspace @mergin/plus-admin-app lint
+      - name: Build add-on apps
+        run: |
+            cd web-app
+            yarn build:libs
+            yarn workspace @mergin/plus-app build:dev
+            yarn workspace @mergin/plus-admin-app build:dev

@@ -93,7 +93,6 @@ def invitation_to_dict(inv: WorkspaceInvitation) -> dict:
 
 def send_invitation_email(inv: WorkspaceInvitation) -> None:
     base_url = current_app.config["MERGIN_BASE_URL"].rstrip("/")
-    user = User.query.filter(func.lower(User.email) == inv.email).first()
     email_data = {
         "subject": f"Invitation to workspace {inv.workspace.name}",
         "html": render_template(
@@ -102,8 +101,8 @@ def send_invitation_email(inv: WorkspaceInvitation) -> None:
             inviter=current_user.username,
             role=inv.role,
             expire=inv.expires_at,
-            # existing users accept in dashboard, new users register first
-            link=f"{base_url}/invitations" if user else f"{base_url}/register",
+            # the page lets existing users accept and new users create their account
+            link=f"{base_url}/invitations/{inv.uuid}",
         ),
         "recipients": [inv.email],
         "sender": current_app.config["MAIL_DEFAULT_SENDER"],
