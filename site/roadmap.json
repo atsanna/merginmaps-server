@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-13",
   "stats": {
-    "tests": 81,
+    "tests": 107,
     "endpoints": 20
   },
   "available": [
@@ -541,7 +541,7 @@
         },
         {
           "n": "Q2",
-          "status": "wip",
+          "status": "done",
           "title": {
             "it": "Revisione dei bug",
             "en": "Bug review"
@@ -553,7 +553,7 @@
         },
         {
           "n": "Q3",
-          "status": "wip",
+          "status": "done",
           "title": {
             "it": "Prove end-to-end",
             "en": "End-to-end checks"
@@ -585,7 +585,7 @@
     }
   ],
   "now": {
-    "it": "Revisione dei bug delle funzioni Enterprise: corretti 26 problemi trovati da tre revisioni (permessi, SSRF dei webhook, progetti QGIS malevoli, SSO, interfaccia); ora verifica finale sull'immagine Docker ricostruita.",
-    "en": "Bug review of the Enterprise features: fixed 26 issues found by three reviews (permissions, webhook SSRF, malicious QGIS projects, SSO, interface); now final check on the rebuilt Docker image."
+    "it": "Roadmap completata e revisione dei bug conclusa (26 problemi corretti, CI verde, immagine Docker provata end-to-end). In attesa delle tue indicazioni: dove pubblicare le immagini Docker e i prossimi obiettivi.",
+    "en": "Roadmap completed and bug review finished (26 issues fixed, CI green, Docker image tested end to end). Waiting for directions: where to publish the Docker images and next goals."
   }
 }
