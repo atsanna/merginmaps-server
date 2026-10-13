@@ -499,7 +499,7 @@
         },
         {
           "n": "23",
-          "status": "todo",
+          "status": "wip",
           "title": {
             "it": "Mappe condivise e OGC API",
             "en": "Shared maps and OGC API"
