@@ -232,3 +232,66 @@ def test_polis_http_contract(app):
         data = requests_mock.post.call_args.kwargs["data"]
         assert data["client_id"] == "tenant=acme.com&product=mergin-maps-product"
         assert data["client_secret"] == "dummy" and data["code_verifier"] == "v"
+
+
+@pytest.mark.parametrize(
+    "uri,allowed",
+    [
+        (REDIRECT, True),
+        ("http://localhost:10042/", True),
+        ("http://localhost:10042.evil.com/qgis", False),
+        ("http://user@localhost:10042/qgis", False),
+        ("http://localhost:10043/qgis", False),
+        ("https://hello.merginmaps.com/mobile/sso-redirect", True),
+        ("https://hello.merginmaps.com/mobile/sso-redirect/../../x", False),
+        ("https://hello.merginmaps.com/mobile/sso-redirectX", False),
+        ("http://localhost:10042/q\\@evil.com", False),
+    ],
+)
+def test_redirect_uri_validation(app, uri, allowed):
+    from mergin_plus.sso.views import _redirect_allowed
+
+    assert _redirect_allowed(uri) == allowed
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("/projects", "/projects"),
+        ("//evil.com", "/"),
+        ("/\t/evil.com", "/"),
+        ("/%09/evil.com", "/%09/evil.com"),
+        ("https://evil.com", "/"),
+        ("/\\evil.com", "/"),
+        ("/x\nSet-Cookie: a", "/"),
+    ],
+)
+def test_safe_next(value, expected):
+    from mergin_plus.sso.views import _safe_next
+
+    assert _safe_next(value) == expected
+
+
+def test_unverified_account_is_not_linked(app, sso):
+    user = add_user("squatter", "Squatter123!")
+    user.email = "jane.doe@acme.com"
+    user.verified_email = False
+    db.session.commit()
+    client = app.test_client()
+    assert _polis_callback(client, _authorize(client)).status_code == 409
+
+
+def test_dashboard_login_bound_to_browser(app, sso):
+    attacker = app.test_client()
+    victim = app.test_client()
+    resp = attacker.get("/v2/sso/login?email=jane.doe@acme.com")
+    # attacker sends the callback URL (with his state) to the victim
+    assert _polis_callback(victim, resp).status_code == 400
+
+
+def test_grant_is_one_time(app):
+    token = SsoGrant.create("code", {"x": 1}, 60)
+    db.session.commit()
+    assert SsoGrant.consume("code", token) == {"x": 1}
+    assert SsoGrant.consume("code", token) is None
+    assert SsoGrant.consume("state", token) is None

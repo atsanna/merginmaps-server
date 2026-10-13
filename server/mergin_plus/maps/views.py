@@ -22,6 +22,55 @@ bp = Blueprint("plus_maps", __name__)
 WMS_REQUESTS = {"getmap", "getlegendgraphic", "getfeatureinfo", "getcapabilities"}
 # read-only WFS (no transactions)
 WFS_REQUESTS = {"getcapabilities", "describefeaturetype", "getfeature"}
+ALLOWED_PARAMS = {
+    # common
+    "VERSION",
+    "FORMAT",
+    # WMS
+    "LAYERS",
+    "STYLES",
+    "CRS",
+    "SRS",
+    "BBOX",
+    "WIDTH",
+    "HEIGHT",
+    "TRANSPARENT",
+    "BGCOLOR",
+    "DPI",
+    "FORMAT_OPTIONS",
+    "OPACITIES",
+    "QUERY_LAYERS",
+    "INFO_FORMAT",
+    "I",
+    "J",
+    "X",
+    "Y",
+    "FEATURE_COUNT",
+    "FI_POINT_TOLERANCE",
+    "FI_LINE_TOLERANCE",
+    "FI_POLYGON_TOLERANCE",
+    "WITH_GEOMETRY",
+    "LAYER",
+    "LAYERTITLE",
+    "RULE",
+    "SHOWFEATURECOUNT",
+    "SLD_VERSION",
+    "SYMBOLWIDTH",
+    "SYMBOLHEIGHT",
+    # WFS
+    "TYPENAME",
+    "TYPENAMES",
+    "OUTPUTFORMAT",
+    "MAXFEATURES",
+    "COUNT",
+    "STARTINDEX",
+    "PROPERTYNAME",
+    "SRSNAME",
+    "FEATUREID",
+    "RESULTTYPE",
+}
+MAX_IMAGE_SIZE = 4096
+MAX_DPI = 600
 # response headers passed from QGIS Server to the client
 PASS_HEADERS = ("Content-Type", "Content-Disposition")
 
@@ -79,13 +128,33 @@ def _proxy(overview: MapOverview, allowed: dict, service_url: str):
 
     allowed: service -> set of allowed (lower case) requests
     """
-    params = {k.upper(): v for k, v in request.args.items()}
-    service = params.get("SERVICE", "WMS").upper()
-    if params.get("REQUEST", "").lower() not in allowed.get(service, set()):
+    raw = {k.upper(): v for k, v in request.args.items()}
+    service = raw.get("SERVICE", "WMS").upper()
+    if raw.get("REQUEST", "").lower() not in allowed.get(service, set()):
         abort(400, "Unsupported OGC request")
-    # clients can not choose the QGIS project file
-    params.pop("MAP", None)
+    # only known parameters are forwarded: no MAP (project file), no external layers
+    # (EXTERNAL_WMS / <name>:URL parameters make QGIS Server fetch arbitrary URLs), no filter expressions
+    params = {k: v for k, v in raw.items() if k in ALLOWED_PARAMS}
+    for key in ("LAYERS", "QUERY_LAYERS", "LAYER", "TYPENAME", "TYPENAMES"):
+        if any(
+            name.strip().upper().startswith("EXTERNAL_")
+            for name in params.get(key, "").split(",")
+        ):
+            abort(400, "External layers are not allowed")
+    for key, limit in (
+        ("WIDTH", MAX_IMAGE_SIZE),
+        ("HEIGHT", MAX_IMAGE_SIZE),
+        ("DPI", MAX_DPI),
+    ):
+        if key in params:
+            try:
+                value = int(float(params[key]))
+            except ValueError:
+                abort(400, f"Invalid {key}")
+            if value <= 0 or value > limit:
+                abort(400, f"{key} must be between 1 and {limit}")
     params["SERVICE"] = service
+    params["REQUEST"] = raw["REQUEST"]
     map_path = os.path.join(overview.data_dir, overview.qgis_file)
     server_data = current_app.config["QGIS_SERVER_DATA"]
     if server_data:

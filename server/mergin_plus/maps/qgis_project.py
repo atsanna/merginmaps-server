@@ -40,12 +40,109 @@ def find_qgis_file(paths: List[str]) -> Optional[str]:
     return candidates[0] if candidates else None
 
 
+# maximum size of the .qgs document (also when unpacked from .qgz)
+MAX_QGS_SIZE = 50 * 1024 * 1024
+
+
+class InvalidProjectError(ValueError):
+    pass
+
+
+def _qgz_member(z: zipfile.ZipFile) -> zipfile.ZipInfo:
+    info = next((i for i in z.infolist() if i.filename.lower().endswith(".qgs")), None)
+    if info is None:
+        raise InvalidProjectError("QGIS project archive without .qgs file")
+    if info.file_size > MAX_QGS_SIZE:
+        raise InvalidProjectError("QGIS project file is too large")
+    return info
+
+
 def read_xml(path: str) -> ET.Element:
     if path.lower().endswith(".qgz"):
         with zipfile.ZipFile(path) as z:
-            name = next(n for n in z.namelist() if n.lower().endswith(".qgs"))
-            return ET.fromstring(z.read(name))
+            info = _qgz_member(z)
+            with z.open(info) as f:
+                # declared size can not be trusted, read at most the limit
+                data = f.read(MAX_QGS_SIZE + 1)
+            if len(data) > MAX_QGS_SIZE:
+                raise InvalidProjectError("QGIS project file is too large")
+            return ET.fromstring(data)
+    if os.path.getsize(path) > MAX_QGS_SIZE:
+        raise InvalidProjectError("QGIS project file is too large")
     return ET.parse(path).getroot()
+
+
+def _write_xml(root: ET.Element, path: str) -> None:
+    """Replace project file (a hard link to project storage, so unlink it first)"""
+    data = ET.tostring(root, encoding="utf-8", xml_declaration=False)
+    data = b"<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>\n" + data
+    if path.lower().endswith(".qgz"):
+        with zipfile.ZipFile(path) as z:
+            info = _qgz_member(z)
+            others = [
+                (i, z.read(i))
+                for i in z.infolist()
+                if i.filename != info.filename and i.file_size <= MAX_QGS_SIZE
+            ]
+        os.unlink(path)
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(info.filename, data)
+            for i, content in others:
+                z.writestr(i, content)
+        return
+    os.unlink(path)
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+# project properties which can contain Python code
+UNSAFE_PROPERTIES = ("Macros", "ExpressionFunctions", "PythonInit")
+
+
+def sanitize_project(path: str, project_files: List[str]) -> List[str]:
+    """Make the copy of a QGIS project used by QGIS Server safe to open.
+
+    Project writers control the .qgs, so every layer whose data are not a file of the project is removed
+    (absolute paths, other projects' data, databases, web services: they could read server files or
+    reach internal hosts through QGIS Server), as well as embedded layers and stored Python code.
+    Returns ids of removed layers.
+    """
+    root = read_xml(path)
+    files = set(project_files)
+    qgis_dir = posixpath.dirname(os.path.basename(path))
+    removed = []
+    for container in root.iter("projectlayers"):
+        for ml in list(container):
+            if ml.tag != "maplayer":
+                continue
+            data_file = datasource_file(
+                _text(ml, "provider", ""), _text(ml, "datasource", "")
+            )
+            if data_file and qgis_dir:
+                data_file = posixpath.normpath(posixpath.join(qgis_dir, data_file))
+            if ml.get("embedded") == "1" or not data_file or data_file not in files:
+                removed.append(_text(ml, "id"))
+                container.remove(ml)
+    removed_ids = set(removed)
+
+    def prune(parent: ET.Element):
+        for child in list(parent):
+            if child.tag == "layer-tree-layer" and (
+                child.get("id") in removed_ids or child.get("embedded") == "1"
+            ):
+                parent.remove(child)
+            elif child.tag == "layer-tree-group" and child.get("embedded") == "1":
+                parent.remove(child)
+            else:
+                prune(child)
+
+    prune(root)
+    for props in root.iter("properties"):
+        for child in list(props):
+            if child.tag in UNSAFE_PROPERTIES:
+                props.remove(child)
+    _write_xml(root, path)
+    return removed
 
 
 def _text(el: Optional[ET.Element], path: str, default=None):

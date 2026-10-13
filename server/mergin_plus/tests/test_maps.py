@@ -297,3 +297,74 @@ def test_shared_map_link_and_ogc(client, maps):
     assert client.delete(link_url).status_code == 204
     g.pop("_login_user", None)
     assert anonymous.get(f"/v2/maps/{new_token}").status_code == 404
+
+
+MALICIOUS_QGS = QGS.replace(
+    "</projectlayers>",
+    """<maplayer type="vector"><id>passwd_1</id><layername>passwd</layername><provider>delimitedtext</provider>
+      <datasource>file:///etc/passwd?delimiter=:</datasource></maplayer>
+    <maplayer type="vector"><id>other_1</id><layername>other</layername><provider>ogr</provider>
+      <datasource>/data/map_overviews/other/v1/data.gpkg</datasource></maplayer>
+    <maplayer type="vector" embedded="1" project="/etc/x.qgs"><id>emb_1</id></maplayer>
+  </projectlayers>""",
+).replace(
+    "<projectlayers>",
+    "<properties><Macros><pythonCode>import os</pythonCode></Macros></properties><projectlayers>",
+)
+
+
+def test_sanitize_project(tmp_path):
+    from mergin_plus.maps.qgis_project import read_xml, sanitize_project
+
+    path = tmp_path / "survey.qgs"
+    path.write_text(MALICIOUS_QGS)
+    # hard link like in overview directories: the original must stay untouched
+    original = tmp_path / "original.qgs"
+    os.link(path, original)
+    removed = sanitize_project(str(path), ["survey.qgs", "base.gpkg"])
+    assert set(removed) == {"db_1", "ortho_1", "passwd_1", "other_1", "emb_1"}
+    root = read_xml(str(path))
+    assert [ml.findtext("id") for ml in root.iter("maplayer")] == ["points_1"]
+    assert [el.get("id") for el in root.iter("layer-tree-layer")] == ["points_1"]
+    assert root.find("properties/Macros") is None
+    assert original.read_text() == MALICIOUS_QGS
+
+
+def test_qgz_size_limit(tmp_path):
+    from mergin_plus.maps import qgis_project
+
+    qgz = tmp_path / "bomb.qgz"
+    with zipfile.ZipFile(qgz, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("bomb.qgs", "<qgis>" + " " * 2000 + "</qgis>")
+    with patch.object(qgis_project, "MAX_QGS_SIZE", 1000):
+        with pytest.raises(qgis_project.InvalidProjectError):
+            qgis_project.read_xml(str(qgz))
+
+
+def test_wms_proxy_parameter_filter(client, maps):
+    owner = add_user("owner", "Owner123!")
+    _, project, _ = _map_project(owner, maps)
+    build_map_overview(str(project.id), project.latest_version)
+    login(client, "owner", "Owner123!")
+    url = f"/v2/projects/{project.id}/map/wms"
+    upstream = MagicMock(status_code=200, headers={"Content-Type": "image/png"})
+    upstream.iter_content.return_value = [b"PNG"]
+    with patch("mergin_plus.maps.views.requests.get", return_value=upstream) as get:
+        resp = client.get(
+            f"{url}?REQUEST=GetMap&LAYERS=points&A:URL=http://169.254.169.254/&FILTER=x&WIDTH=256"
+        )
+        assert resp.status_code == 200
+        params = get.call_args.kwargs["params"]
+        assert "A:URL" not in params and "FILTER" not in params
+        assert params["WIDTH"] == "256"
+        assert (
+            client.get(f"{url}?REQUEST=GetMap&LAYERS=EXTERNAL_WMS:A").status_code == 400
+        )
+        assert client.get(f"{url}?REQUEST=GetMap&WIDTH=100000").status_code == 400
+        assert client.get(f"{url}?REQUEST=GetMap&DPI=x").status_code == 400
+    # served project copy contains only packaged layers
+    overview = db.session.get(MapOverview, project.id)
+    with open(os.path.join(overview.data_dir, "survey.qgs")) as f:
+        served = f.read()
+    assert "parcels" not in served and "points_1" in served
+    assert "db_1" in [layer["id"] for layer in overview.config["layers"]]

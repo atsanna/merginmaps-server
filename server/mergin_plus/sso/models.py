@@ -7,6 +7,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import JSONB
 
 from mergin.app import db
@@ -44,13 +45,16 @@ class SsoGrant(db.Model):
 
     @classmethod
     def consume(cls, kind: str, token: Optional[str]) -> Optional[dict]:
-        """Return data of valid grant and remove it (one-time use), does not commit"""
+        """Return data of valid grant and remove it (one-time use), does not commit.
+        A single DELETE ... RETURNING makes concurrent use of the same token impossible.
+        """
         if not token:
             return None
-        grant = cls.query.filter_by(token_hash=_hash(token), kind=kind).first()
-        if not grant:
+        row = db.session.execute(
+            delete(cls)
+            .where(cls.token_hash == _hash(token), cls.kind == kind)
+            .returning(cls.data, cls.expires_at)
+        ).first()
+        if not row or row.expires_at < datetime.utcnow():
             return None
-        db.session.delete(grant)
-        if grant.expires_at < datetime.utcnow():
-            return None
-        return grant.data
+        return row.data

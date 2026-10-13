@@ -18,7 +18,7 @@ from flask import current_app
 from mergin.app import db
 from mergin.sync.models import Project, ProjectVersion
 from .models import MapOverview
-from .qgis_project import find_qgis_file, parse_project
+from .qgis_project import find_qgis_file, parse_project, sanitize_project
 
 
 def project_overview_dir(project_id) -> str:
@@ -66,7 +66,10 @@ def build_overview(project: Project) -> MapOverview:
             raise ValueError("Project has no QGIS project file")
         shutil.rmtree(target, ignore_errors=True)
         paths = _materialize(project, target)
-        config = parse_project(os.path.join(target, qgis_file), paths)
+        qgis_path = os.path.join(target, qgis_file)
+        # configuration is read from the original, layers without project data are marked not packaged
+        config = parse_project(qgis_path, paths)
+        sanitize_project(qgis_path, paths)
     except Exception as e:  # keep previous map when processing fails
         logging.warning(f"Map overview of project {project.id} failed: {e}")
         shutil.rmtree(target, ignore_errors=True)

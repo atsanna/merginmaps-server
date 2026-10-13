@@ -8,7 +8,8 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from flask import current_app
 
 from mergin.app import db
@@ -139,40 +140,72 @@ def test_webhooks_api_and_dispatch(delay_mock, client, public_dns):
     assert client.get(url).status_code == 403
 
 
-def test_webhook_delivery(app, public_dns):
+class _Recorder(BaseHTTPRequestHandler):
+    status = 200
+    requests = []
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        _Recorder.requests.append((dict(self.headers), body))
+        self.send_response(_Recorder.status)
+        self.end_headers()
+        self.wfile.write(b"INTERNAL-SECRET-BODY")
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def local_server():
+    server = HTTPServer(("127.0.0.1", 0), _Recorder)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    _Recorder.requests = []
+    _Recorder.status = 200
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+
+
+def test_webhook_delivery(app, local_server):
     owner = add_user("owner", "Owner123!")
     ws = _workspace("hooks", owner)
-    hook = Webhook(ws.id, "https://example.com/hook")
+    hook = Webhook(ws.id, f"{local_server}/hook?x=1")
     db.session.add(hook)
     db.session.commit()
 
-    ok = MagicMock(status_code=200, text="")
-    with patch("mergin_plus.webhooks.delivery.requests.post", return_value=ok) as post:
+    # private addresses are refused unless explicitly allowed
+    deliver_webhook.apply(args=(hook.id, "project.created", {"event": "x"}))
+    db.session.refresh(hook)
+    assert _Recorder.requests == []
+    assert "public address" in hook.last_error
+
+    current_app.config["WEBHOOKS_ALLOW_PRIVATE_URLS"] = True
+    try:
+        hook.failures = 0
+        db.session.commit()
         deliver_webhook.apply(
             args=(hook.id, "project.created", {"event": "project.created"})
         )
-    body = post.call_args.kwargs["data"]
-    headers = post.call_args.kwargs["headers"]
-    assert headers["X-Webhook-Event"] == "project.created"
-    expected = (
-        "sha256=" + hmac.new(hook.secret.encode(), body, hashlib.sha256).hexdigest()
-    )
-    assert headers["X-Webhook-Signature"] == expected == sign(hook.secret, body)
-    assert post.call_args.kwargs["allow_redirects"] is False
-    db.session.refresh(hook)
-    assert hook.last_status == 200 and hook.failures == 0
+        headers, body = _Recorder.requests[-1]
+        assert headers["X-Webhook-Event"] == "project.created"
+        expected = (
+            "sha256=" + hmac.new(hook.secret.encode(), body, hashlib.sha256).hexdigest()
+        )
+        assert headers["X-Webhook-Signature"] == expected == sign(hook.secret, body)
+        assert headers["Host"].startswith("127.0.0.1:")
+        db.session.refresh(hook)
+        assert hook.last_status == 200 and hook.failures == 0
 
-    # client errors are recorded, webhook is disabled after too many failures
-    current_app.config["WEBHOOKS_MAX_FAILURES"] = 2
-    try:
-        bad = MagicMock(status_code=404, text="not found")
-        with patch("mergin_plus.webhooks.delivery.requests.post", return_value=bad):
-            for _ in range(2):
-                deliver_webhook.apply(args=(hook.id, "x", {}))
+        # errors are recorded without the response body, webhook disabled after too many failures
+        _Recorder.status = 404
+        current_app.config["WEBHOOKS_MAX_FAILURES"] = 2
+        for _ in range(2):
+            deliver_webhook.apply(args=(hook.id, "x", {}))
         db.session.refresh(hook)
         assert hook.failures == 2 and hook.active is False
-        assert hook.last_error == "not found"
+        assert hook.last_error == "HTTP 404"
     finally:
+        current_app.config["WEBHOOKS_ALLOW_PRIVATE_URLS"] = False
         current_app.config["WEBHOOKS_MAX_FAILURES"] = 20
 
     # network errors are retried
@@ -180,29 +213,32 @@ def test_webhook_delivery(app, public_dns):
     hook.failures = 0
     db.session.commit()
     with patch(
-        "mergin_plus.webhooks.delivery.requests.post",
-        side_effect=requests.ConnectionError("down"),
-    ) as post, patch.object(
+        "mergin_plus.webhooks.delivery._http_post",
+        side_effect=OSError("down"),
+    ), patch(
+        "mergin_plus.webhooks.delivery.socket.getaddrinfo",
+        return_value=[(None, None, None, None, ("93.184.216.34", 443))],
+    ), patch.object(
         deliver_webhook, "retry", side_effect=RuntimeError("retry")
     ):
         result = deliver_webhook.apply(args=(hook.id, "x", {}))
     assert isinstance(result.result, RuntimeError)
 
 
-def test_webhook_url_validation(app):
-    with patch(
-        "mergin_plus.webhooks.delivery.socket.getaddrinfo",
-        return_value=[(None, None, None, None, ("127.0.0.1", 80))],
-    ):
-        with pytest.raises(WebhookUrlError):
-            validate_url("http://localhost/hook")
-        current_app.config["WEBHOOKS_ALLOW_PRIVATE_URLS"] = True
-        try:
-            validate_url("http://localhost/hook")
-        finally:
-            current_app.config["WEBHOOKS_ALLOW_PRIVATE_URLS"] = False
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:5000\\@8.8.8.8/",
+        "http://user:pass@example.com/",
+        "http://example.com/a b",
+        "http://example.com/\nX: y",
+        "ftp://example.com/",
+        "javascript:alert(1)",
+    ],
+)
+def test_webhook_url_rejected(app, url, public_dns):
     with pytest.raises(WebhookUrlError):
-        validate_url("javascript:alert(1)")
+        validate_url(url)
 
 
 def test_branding_config(client):

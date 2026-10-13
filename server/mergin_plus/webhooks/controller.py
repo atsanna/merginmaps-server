@@ -5,7 +5,7 @@
 
 from datetime import datetime
 
-import requests
+import urllib3
 from flask import abort, current_app, request
 from flask_login import current_user
 
@@ -109,6 +109,10 @@ def ping_webhook(id: int, webhook_id: int):
         resp = send(webhook, "ping", payload)
     except WebhookUrlError as e:
         return {"ok": False, "status": None, "error": str(e)}, 200
-    except requests.RequestException as e:
-        return {"ok": False, "status": None, "error": str(e)}, 200
+    except (urllib3.exceptions.HTTPError, OSError) as e:
+        return {
+            "ok": False,
+            "status": None,
+            "error": f"Connection failed: {type(e).__name__}",
+        }, 200
     return {"ok": 200 <= resp.status_code < 300, "status": resp.status_code}, 200

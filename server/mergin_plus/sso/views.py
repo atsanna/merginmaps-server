@@ -17,13 +17,14 @@ The dashboard uses GET /v2/sso/login, the callback then signs the user in with a
 """
 
 import base64
+import re
 import hashlib
 import secrets
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urlencode, urlparse
 
-from flask import Blueprint, abort, current_app, jsonify, redirect, request
+from flask import Blueprint, abort, current_app, jsonify, redirect, request, session
 from flask_login import login_user
 from sqlalchemy import func
 
@@ -66,19 +67,49 @@ def _has_connection(tenant: str) -> bool:
         abort(502, "SSO server is not available")
 
 
+UNSAFE_URL_CHARS = re.compile(r"[\\\s\x00-\x1f\x7f]")
+
+
 def _redirect_allowed(uri: str) -> bool:
-    target = urlparse(uri or "")
-    if not target.scheme or not target.netloc:
+    if not uri or UNSAFE_URL_CHARS.search(uri):
         return False
+    target = urlparse(uri)
+    if not target.scheme or not target.netloc or "@" in target.netloc:
+        return False
+    # no dot segments: browsers would resolve them outside the allowed path
+    if any(part in (".", "..") for part in target.path.split("/")):
+        return False
+    path = target.path or "/"
     for allowed in current_app.config["SSO_ALLOWED_REDIRECT_URIS"]:
         a = urlparse(allowed.strip())
+        allowed_path = a.path or "/"
         if (
             a.scheme == target.scheme
             and a.netloc == target.netloc
-            and target.path.startswith(a.path or "/")
+            and (
+                path == allowed_path
+                or path.startswith(allowed_path.rstrip("/") + "/")
+                or allowed_path.endswith("/")
+                and path.startswith(allowed_path)
+            )
         ):
             return True
     return False
+
+
+def _safe_next(value: Optional[str]) -> str:
+    """Local path to go to after dashboard login, anything else falls back to /"""
+    if not value or UNSAFE_URL_CHARS.search(value):
+        return "/"
+    parsed = urlparse(value)
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or not value.startswith("/")
+        or value.startswith("//")
+    ):
+        return "/"
+    return value
 
 
 def _callback_url() -> str:
@@ -112,6 +143,13 @@ def _provision_user(info: dict, tenant: str) -> User:
     if user:
         if not user.active:
             abort(403, "Account is not active")
+        # an unverified e-mail could have been set by someone else on their own account
+        if not user.verified_email:
+            abort(
+                409,
+                "An account with this e-mail exists but the e-mail is not verified, "
+                "please verify it first",
+            )
         return user
     username = User.generate_username(email)
     db.session.info["audit_user_creation_source"] = "sso"
@@ -195,11 +233,17 @@ def sso_login():
     tenant = _tenant_for(request.args.get("email"))
     if not tenant or not _has_connection(tenant):
         abort(404, "SSO connection not found")
-    next_path = request.args.get("next") or "/"
-    # only local paths, no open redirects
-    if not next_path.startswith("/") or next_path.startswith("//"):
-        next_path = "/"
-    return _start_login(tenant, {"client": "dashboard", "next": next_path})
+    # bind the login to this browser (no login CSRF with a callback URL started by someone else)
+    nonce = secrets.token_urlsafe(16)
+    session["plus_sso_nonce"] = nonce
+    return _start_login(
+        tenant,
+        {
+            "client": "dashboard",
+            "next": _safe_next(request.args.get("next")),
+            "nonce": nonce,
+        },
+    )
 
 
 @bp.route("/v2/sso/callback", methods=["GET"])
@@ -226,12 +270,16 @@ def sso_callback():
         info = polis.userinfo(token)
     except polis.PolisError:
         abort(502, "SSO server error")
+    if data["client"] == "dashboard" and not secrets.compare_digest(
+        session.pop("plus_sso_nonce", ""), data.get("nonce", "-")
+    ):
+        abort(400, "SSO login was started in another browser")
     user = _provision_user(info, data["tenant"])
 
     if data["client"] == "dashboard":
         login_user(user)
         _signed_in(user, "sso")
-        return redirect(data["next"])
+        return redirect(_safe_next(data["next"]))
 
     code = SsoGrant.create(
         "code",
