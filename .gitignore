@@ -20,6 +20,7 @@ venv/
 # production env
 .prod.env
 .sso.env
+deployment/plus/.env
 
 # generated documentation
 gen
