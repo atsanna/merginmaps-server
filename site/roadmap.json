@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-13",
   "stats": {
-    "tests": 80,
+    "tests": 81,
     "endpoints": 20
   },
   "available": [
@@ -72,6 +72,10 @@
     {
       "it": "Interfaccia web per workspace, membri, inviti, trasferimenti, webhook, attività, mappa e SSO",
       "en": "Web interface for workspaces, members, invitations, transfers, webhooks, activity, map and SSO"
+    },
+    {
+      "it": "Mappe condivise con link pubblico, incorporamento e servizi OGC",
+      "en": "Shared maps with public link, embedding and OGC services"
     }
   ],
   "phases": [
@@ -499,14 +503,14 @@
         },
         {
           "n": "23",
-          "status": "wip",
+          "status": "done",
           "title": {
             "it": "Mappe condivise e OGC API",
             "en": "Shared maps and OGC API"
           },
           "desc": {
-            "it": "Link pubblici, incorporamento, servizi OGC (opzionale).",
-            "en": "Public links, embedding, OGC services (optional)."
+            "it": "Link pubblico alla mappa (rigenerabile), pagina incorporabile in un iframe, servizi OGC WMS e WFS in sola lettura attivabili per link.",
+            "en": "Public map link (can be regenerated), page embeddable in an iframe, read-only OGC WMS and WFS services enabled per link."
           }
         }
       ]

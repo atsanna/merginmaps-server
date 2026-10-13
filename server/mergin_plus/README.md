@@ -142,6 +142,10 @@ QGIS Server (upstream `qgis/qgis-server` image) renders the maps from that direc
 | `GET /v2/projects/{id}/map` | Map configuration (layers, tree, themes, extent, basemap, `wms_url`), 404 "Map config does not exist" |
 | `POST /v2/projects/{id}/map/refresh` | Process latest version again (writers) |
 | `GET /v2/projects/{id}/map/wms` | WMS proxy (GetMap, GetLegendGraphic, GetFeatureInfo, GetCapabilities) with project read permission |
+| `GET/PUT/DELETE /v2/projects/{id}/map/link` | Public map link (project owners, workspace admins): create, `ogc_enabled`, `regenerate`, remove |
+| `GET /v2/maps/{token}` | Map configuration for anyone with the link (dashboard page `/maps/{token}`, embeddable) |
+| `GET /v2/maps/{token}/wms` | WMS of the shared map |
+| `GET /v2/maps/{token}/ogc` | Read-only OGC services when enabled: WMS and WFS (GetCapabilities, DescribeFeatureType, GetFeature) |
 
 ## Roles
 

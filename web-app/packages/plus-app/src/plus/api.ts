@@ -83,6 +83,14 @@ export interface AuditEvent {
   metadata: Record<string, unknown>
 }
 
+export interface MapLink {
+  enabled: boolean
+  token?: string
+  url?: string
+  ogc_enabled?: boolean
+  ogc_url?: string | null
+}
+
 export interface Page<T> {
   items: T[]
   count: number
@@ -211,7 +219,15 @@ export const PlusApi = {
   projectMap: (projectId: string) =>
     http().get<ProjectMap>(`/v2/projects/${projectId}/map`),
   refreshProjectMap: (projectId: string) =>
-    http().post(`/v2/projects/${projectId}/map/refresh`)
+    http().post(`/v2/projects/${projectId}/map/refresh`),
+  mapLink: (projectId: string) =>
+    http().get<MapLink>(`/v2/projects/${projectId}/map/link`),
+  setMapLink: (
+    projectId: string,
+    data: { ogc_enabled?: boolean; regenerate?: boolean }
+  ) => http().put<MapLink>(`/v2/projects/${projectId}/map/link`, data),
+  deleteMapLink: (projectId: string) =>
+    http().delete(`/v2/projects/${projectId}/map/link`)
 }
 
 /** Error message from API error response */

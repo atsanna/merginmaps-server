@@ -350,6 +350,14 @@ export const createRouter = (pinia: Pinia) => {
         redirect: '/workspace/settings'
       },
       {
+        // public shared map, also embeddable in an iframe
+        path: '/maps/:token',
+        name: 'plus-shared-map',
+        component: ProjectMapView,
+        props: true,
+        meta: { public: true, allowedForNoWorkspace: true }
+      },
+      {
         path: '/invitations/:uuid',
         name: 'plus-invitation',
         component: InvitationView,

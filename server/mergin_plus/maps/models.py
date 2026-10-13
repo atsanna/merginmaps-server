@@ -29,3 +29,24 @@ class MapOverview(db.Model):
     updated = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     project = db.relationship("Project")
+
+
+class MapLink(db.Model):
+    """Public link to the web map of a project (anyone with the link can see the map)"""
+
+    __tablename__ = "map_link"
+
+    project_id = db.Column(
+        UUID(as_uuid=True),
+        db.ForeignKey("project.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    token = db.Column(db.String(64), nullable=False, unique=True)
+    # read-only OGC services (WMS, WFS) of the map through the link
+    ogc_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    created = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_by = db.Column(
+        db.Integer, db.ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+
+    project = db.relationship("Project")

@@ -79,6 +79,66 @@ SPDX-License-Identifier: AGPL-3.0-only
             </div>
           </div>
         </app-section>
+        <app-section v-if="canRefresh">
+          <template #title>Share map</template>
+          <div class="px-4 pb-4 flex flex-column gap-2">
+            <template v-if="link.enabled">
+              <span class="paragraph-p6 opacity-80"
+                >Anyone with the link can see this map.</span
+              >
+              <div class="flex gap-2">
+                <PInputText
+                  :model-value="link.url"
+                  readonly
+                  class="flex-grow-1"
+                />
+                <PButton icon="ti ti-copy" text @click="copy(link.url)" />
+              </div>
+              <PButton
+                label="Copy embed code"
+                size="small"
+                severity="secondary"
+                @click="copy(embedCode)"
+              />
+              <div class="flex align-items-center gap-2">
+                <PInputSwitch
+                  :model-value="link.ogc_enabled"
+                  input-id="ogc"
+                  @update:model-value="(v) => updateLink({ ogc_enabled: v })"
+                />
+                <label for="ogc">OGC services (WMS, WFS)</label>
+              </div>
+              <div v-if="link.ogc_url" class="flex gap-2">
+                <PInputText
+                  :model-value="link.ogc_url"
+                  readonly
+                  class="flex-grow-1"
+                />
+                <PButton icon="ti ti-copy" text @click="copy(link.ogc_url)" />
+              </div>
+              <div class="flex gap-2">
+                <PButton
+                  label="New link"
+                  size="small"
+                  severity="secondary"
+                  @click="updateLink({ regenerate: true })"
+                />
+                <PButton
+                  label="Stop sharing"
+                  size="small"
+                  severity="danger"
+                  @click="disableLink"
+                />
+              </div>
+            </template>
+            <PButton
+              v-else
+              label="Create public link"
+              severity="secondary"
+              @click="updateLink({})"
+            />
+          </div>
+        </app-section>
         <app-section v-if="featureInfo.length">
           <template #title>Feature</template>
           <div class="px-4 pb-4">
@@ -117,8 +177,9 @@ import View from 'ol/View'
 import 'ol/ol.css'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
-import { PlusApi, ProjectMap, apiError } from '@/plus/api'
+import { MapLink, PlusApi, ProjectMap, apiError } from '@/plus/api'
 
+const props = defineProps<{ token?: string }>()
 const projectStore = useProjectStore()
 const notificationStore = useNotificationStore()
 
@@ -128,7 +189,8 @@ const notReady = ref(false)
 const visible = ref<string[]>([])
 const theme = ref<string>()
 const featureInfo = ref<{ layer: string; properties: object }[]>([])
-const canRefresh = computed(() => projectStore.isProjectOwner)
+const canRefresh = computed(() => !props.token && projectStore.isProjectOwner)
+const link = ref<MapLink>({ enabled: false })
 const themeNames = computed(() => Object.keys(config.value?.themes ?? {}))
 
 let map: OlMap | undefined
@@ -234,23 +296,29 @@ function createMap() {
   fitToProject()
 }
 
+async function fetchConfig(): Promise<ProjectMap> {
+  if (props.token) {
+    return (await getHttpService().get(`/v2/maps/${props.token}`)).data
+  }
+  return (await PlusApi.projectMap(projectStore.project?.id)).data
+}
+
 async function load() {
-  const projectId = projectStore.project?.id
-  if (!projectId) return
+  if (!props.token && !projectStore.project?.id) return
   try {
-    const resp = await PlusApi.projectMap(projectId)
+    const data = await fetchConfig()
     const first = !config.value
-    const changed = config.value && config.value.version !== resp.data.version
-    config.value = resp.data
+    const changed = config.value && config.value.version !== data.version
+    config.value = data
     notReady.value = false
     if (first) {
-      visible.value = resp.data.layers
+      visible.value = data.layers
         .filter((l) => l.packaged && l.visible)
         .map((l) => l.id)
       // wait for the map element to be rendered
       setTimeout(createMap)
     } else if (changed) {
-      wmsSource?.updateParams({ _v: resp.data.version })
+      wmsSource?.updateParams({ _v: data.version })
     }
   } catch (err) {
     if ((err as { response?: { status?: number } })?.response?.status === 404) {
@@ -259,6 +327,39 @@ async function load() {
       notificationStore.error({ text: apiError(err, 'Failed to load map') })
     }
   }
+  if (canRefresh.value && !link.value.token) {
+    try {
+      link.value = (await PlusApi.mapLink(projectStore.project.id)).data
+    } catch {
+      // only project owners and workspace admins can share maps
+    }
+  }
+}
+
+async function updateLink(data: {
+  ogc_enabled?: boolean
+  regenerate?: boolean
+}) {
+  try {
+    link.value = (await PlusApi.setMapLink(projectStore.project.id, data)).data
+  } catch (err) {
+    notificationStore.error({ text: apiError(err, 'Failed to share map') })
+  }
+}
+
+async function disableLink() {
+  await PlusApi.deleteMapLink(projectStore.project.id)
+  link.value = { enabled: false }
+}
+
+const embedCode = computed(
+  () =>
+    `<iframe src="${link.value.url}" width="800" height="600" style="border:0"></iframe>`
+)
+
+function copy(text: string) {
+  navigator.clipboard?.writeText(text)
+  notificationStore.show({ text: 'Copied to clipboard' })
 }
 
 async function refresh() {
@@ -271,7 +372,7 @@ async function refresh() {
 }
 
 watch(
-  () => projectStore.project?.id,
+  () => props.token ?? projectStore.project?.id,
   () => {
     load()
     window.clearInterval(poll)

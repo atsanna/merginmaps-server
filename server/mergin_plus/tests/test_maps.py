@@ -221,3 +221,79 @@ def test_version_created_queues_overview(client, maps):
         project_version_created.send(version)
         assert delay.call_count == 1
     assert client.get(f"/v2/projects/{project.id}/map").status_code == 404
+
+
+def test_shared_map_link_and_ogc(client, maps):
+    owner = add_user("owner", "Owner123!")
+    reader = add_user("reader", "Reader123!")
+    ws, project, _ = _map_project(owner, maps)
+    ws.set_role(reader.id, WorkspaceRole.READER)
+    db.session.commit()
+    build_map_overview(str(project.id), project.latest_version)
+    link_url = f"/v2/projects/{project.id}/map/link"
+
+    # readers can not share the map
+    login(client, "reader", "Reader123!")
+    assert client.put(link_url, json={}).status_code == 403
+    login(client, "owner", "Owner123!")
+    assert client.get(link_url).json == {"enabled": False}
+    resp = client.put(link_url, json={})
+    assert resp.status_code == 200
+    token = resp.json["token"]
+    assert resp.json["url"].endswith(f"/maps/{token}")
+    assert resp.json["ogc_enabled"] is False
+
+    # anyone with the link sees the map, without project internals
+    anonymous = current_app.test_client()
+    from flask import g
+
+    g.pop("_login_user", None)
+    resp = anonymous.get(f"/v2/maps/{token}")
+    assert resp.status_code == 200
+    assert resp.json["wms_url"] == f"/v2/maps/{token}/wms"
+    assert "project_id" not in resp.json
+    assert anonymous.get("/v2/maps/wrong-token").status_code == 404
+
+    upstream = MagicMock(status_code=200, headers={"Content-Type": "image/png"})
+    upstream.iter_content.return_value = [b"PNG"]
+    with patch("mergin_plus.maps.views.requests.get", return_value=upstream) as get:
+        assert anonymous.get(f"/v2/maps/{token}/wms?REQUEST=GetMap").status_code == 200
+        assert get.call_args.kwargs["headers"]["X-Qgis-Service-Url"].endswith(
+            f"/v2/maps/{token}/wms"
+        )
+        # OGC services only when enabled, read-only WFS
+        assert (
+            anonymous.get(
+                f"/v2/maps/{token}/ogc?SERVICE=WFS&REQUEST=GetFeature"
+            ).status_code
+            == 404
+        )
+        g.pop("_login_user", None)
+        login(client, "owner", "Owner123!")
+        resp = client.put(link_url, json={"ogc_enabled": True})
+        assert resp.json["ogc_url"].endswith(f"/v2/maps/{token}/ogc")
+        g.pop("_login_user", None)
+        assert (
+            anonymous.get(
+                f"/v2/maps/{token}/ogc?SERVICE=WFS&REQUEST=GetFeature"
+            ).status_code
+            == 200
+        )
+        assert get.call_args.kwargs["params"]["SERVICE"] == "WFS"
+        assert (
+            anonymous.get(
+                f"/v2/maps/{token}/ogc?SERVICE=WFS&REQUEST=Transaction"
+            ).status_code
+            == 400
+        )
+
+    # regenerated link invalidates the old one, deleted link stops working
+    login(client, "owner", "Owner123!")
+    new_token = client.put(link_url, json={"regenerate": True}).json["token"]
+    assert new_token != token
+    g.pop("_login_user", None)
+    assert anonymous.get(f"/v2/maps/{token}").status_code == 404
+    login(client, "owner", "Owner123!")
+    assert client.delete(link_url).status_code == 204
+    g.pop("_login_user", None)
+    assert anonymous.get(f"/v2/maps/{new_token}").status_code == 404
