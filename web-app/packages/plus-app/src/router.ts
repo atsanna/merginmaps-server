@@ -12,7 +12,6 @@ import {
   VerifyEmailView,
   routeUtils,
   useUserStore,
-  SideBarTemplate as SideBar,
   ProjectRouteName,
   UserRouteName,
   DashboardRouteName,
@@ -34,6 +33,7 @@ import ProjectsListView from '@/modules/project/views/ProjectsListView.vue'
 import ProjectView from '@/modules/project/views/ProjectView.vue'
 import LoginView from '@/modules/user/views/LoginView.vue'
 import ProfileView from '@/modules/user/views/ProfileView.vue'
+import PlusSideBar from '@/plus/components/PlusSideBar.vue'
 import InvitationView from '@/plus/views/InvitationView.vue'
 import ProjectMapView from '@/plus/views/ProjectMapView.vue'
 import WorkspaceMembersView from '@/plus/views/WorkspaceMembersView.vue'
@@ -41,6 +41,7 @@ import WorkspaceSettingsView from '@/plus/views/WorkspaceSettingsView.vue'
 import WorkspacesView from '@/plus/views/WorkspacesView.vue'
 
 export const PLUS_MAP_ROUTE = 'plus-project-map'
+const SideBar = PlusSideBar
 
 export const createRouter = (pinia: Pinia) => {
   const router = createRouterInstance({

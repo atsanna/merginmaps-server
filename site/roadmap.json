@@ -487,14 +487,14 @@
         },
         {
           "n": "22",
-          "status": "wip",
+          "status": "done",
           "title": {
             "it": "Personalizzazione grafica",
             "en": "Branding"
           },
           "desc": {
-            "it": "Nome e logo dell'istanza esposti ai client (INSTANCE_NAME, DASHBOARD_LOGO_URL); manca l'uso nella dashboard.",
-            "en": "Instance name and logo exposed to clients (INSTANCE_NAME, DASHBOARD_LOGO_URL); dashboard usage still missing."
+            "it": "Logo (DASHBOARD_LOGO_URL) e nome dell'istanza (INSTANCE_NAME) nella barra laterale e nel titolo della pagina.",
+            "en": "Logo (DASHBOARD_LOGO_URL) and instance name (INSTANCE_NAME) in the sidebar and page title."
           }
         },
         {
