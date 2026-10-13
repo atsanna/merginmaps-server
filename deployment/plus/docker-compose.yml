@@ -12,7 +12,7 @@ networks:
     name: mergin
 
 x-backend: &backend
-  image: merginmaps-server-plus:${TAG:-local}
+  image: ${IMAGE_PREFIX:-}merginmaps-server-plus:${TAG:-local}
   restart: always
   env_file:
     - .prod.env
@@ -74,7 +74,7 @@ services:
       - celery-beat
     command: ["celery -A mergin_plus.wsgi.celery worker --loglevel=info"]
   web:
-    image: merginmaps-web-plus:${TAG:-local}
+    image: ${IMAGE_PREFIX:-}merginmaps-web-plus:${TAG:-local}
     container_name: merginmaps-web
     restart: always
     depends_on:

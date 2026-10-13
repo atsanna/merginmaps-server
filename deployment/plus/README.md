@@ -25,6 +25,34 @@ Superusers create workspaces from the admin panel (or any user from *Manage work
 
 Upgrades: rebuild the images, then `docker compose run --rm server "flask db upgrade heads"` and `docker compose up -d`.
 
+## Publishing the images
+
+Only `merginmaps-server-plus` and `merginmaps-web-plus` need to be published: the server image already contains
+the CE image layers.
+
+```bash
+./build.sh
+docker login ghcr.io -u <github user>    # password: personal access token with write:packages
+./publish.sh ghcr.io/<github user> 2026.10.0
+```
+
+`publish.sh` pushes `<prefix>/<image>:<version>` and `:latest` (set `LATEST=false` to skip it); for Docker Hub use
+`docker login` and the prefix `docker.io/<user>`. On GitHub Container Registry new packages are private: make them
+public in the package settings and link them to the repository if needed.
+
+On the target host, use the published images instead of building them:
+
+```bash
+cat > .env <<EOF
+IMAGE_PREFIX=ghcr.io/<github user>/
+TAG=2026.10.0
+EOF
+docker compose pull && docker compose up -d
+```
+
+The images are built for the architecture of the build machine; for other platforms (e.g. arm64) build them with
+`docker buildx build --platform linux/amd64,linux/arm64 --push` and the same arguments used in `build.sh`.
+
 ## Web maps
 
 ```bash
